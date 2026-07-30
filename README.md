@@ -203,6 +203,19 @@ Continuous Kafka ingestion uses the generic `ingestion.records.v1` topic.
 Telecom CDR is the included demonstration dataset; the same versioned contract
 supports XDR, HR, IoT, financial, and other record-oriented sources.
 
+Entity onboarding is contract-driven and does not require application code
+changes or database migrations. A producer supplies a new entity UUID, its
+ordered column structure, and signed record chunks. Java transactionally
+registers an unknown entity and its normalized columns; subsequent chunks with
+the same UUID reuse that metadata. A materially different structure requires a
+new entity UUID.
+
+For example, a 500,000-record Customer stream can be published as 100 chunks
+of 5,000 records. All chunks use the same entity UUID and `streamId`, a unique
+`chunkId`, and monotonically increasing `sequence` values. The topic remains
+open for later Customer chunks and for unrelated entities identified by their
+own UUIDs.
+
 After signature verification and envelope decoding, the logical payload has
 the following structure:
 
