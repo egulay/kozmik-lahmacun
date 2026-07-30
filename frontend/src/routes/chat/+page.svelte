@@ -12,7 +12,7 @@
   import * as Avatar from '$lib/components/ui/avatar/index.js';
   import { ScrollArea } from '$lib/components/ui/scroll-area/index.js';
   import { chatConnection } from '$lib/chat-connection';
-  import { linkExecutionReferences } from '$lib/chat-message';
+  import MarkdownMessage from '$lib/components/MarkdownMessage.svelte';
   import { currentUser } from '$lib/session';
   import StateView from '$lib/components/StateView.svelte';
   import { Textarea } from '$lib/components/ui/textarea/index.js';
@@ -351,9 +351,16 @@
                   {/if}
                   <Card.Root class={`relative z-10 w-fit min-w-0 max-w-full shadow-none ${item.role === 'USER' ? 'bg-muted' : ''}`}>
                     <Card.Content class="px-3 py-2.5">
-                      <p class="break-words whitespace-pre-wrap text-sm leading-5">
-                        <span class="mr-1.5 font-medium text-muted-foreground">{item.role === 'USER' ? $t('you') : $t('brand')}:</span>{#if item.role === 'ASSISTANT' && !item.content && ['PENDING', 'STREAMING'].includes(item.status)}<span aria-label={$t('thinking')}>...</span>{:else}{#each linkExecutionReferences(item.content || (item.status === 'FAILED' ? $t('assistantFailed') : '...')) as part}{#if part.executionId}<a class="font-mono font-medium text-primary underline underline-offset-4 hover:text-primary/80" href={`/executions/${part.executionId}`}>{part.text}</a>{:else}{part.text}{/if}{/each}{/if}
-                      </p>
+                      <div class="flex min-w-0 items-start gap-1.5">
+                        <span class="shrink-0 text-sm font-medium leading-5 text-muted-foreground">{item.role === 'USER' ? $t('you') : $t('brand')}:</span>
+                        {#if item.role === 'ASSISTANT' && !item.content && ['PENDING', 'STREAMING'].includes(item.status)}
+                          <span class="text-sm leading-5" aria-label={$t('thinking')}>...</span>
+                        {:else if item.role === 'ASSISTANT'}
+                          <MarkdownMessage content={item.content || (item.status === 'FAILED' ? $t('assistantFailed') : '...')} />
+                        {:else}
+                          <p class="min-w-0 break-words whitespace-pre-wrap text-sm leading-5">{item.content}</p>
+                        {/if}
+                      </div>
                     </Card.Content>
                   </Card.Root>
                 </div>

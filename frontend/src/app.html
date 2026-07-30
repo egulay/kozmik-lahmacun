@@ -3,15 +3,18 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">
     <script>
       try {
-        const theme = localStorage.getItem('kozmik-theme');
-        if (theme === 'dark' || (!theme && matchMedia('(prefers-color-scheme: dark)').matches)) {
-          document.documentElement.classList.add('dark');
-        }
+        const theme = localStorage.getItem('kozmik-theme-preference');
+        const dark =
+          theme === 'dark' ||
+          ((theme !== 'light' && theme !== 'dark') &&
+            matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.classList.toggle('dark', dark);
       } catch {}
     </script>
     <div style="display: contents">%sveltekit.body%</div>

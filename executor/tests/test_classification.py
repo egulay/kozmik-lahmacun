@@ -2,6 +2,7 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
+from kozmik_executor.chat.models import ClassificationRequest
 from kozmik_executor.main import app
 
 
@@ -52,6 +53,19 @@ def test_contract_rejects_raw_row_payload(monkeypatch) -> None:
     )
 
     assert response.status_code == 422
+
+
+def test_classification_reduces_stream_history_to_latest_ten_messages() -> None:
+    payload = body("Surprise me")
+    payload["history"] = [
+        {"role": "user", "content": f"message-{index}"} for index in range(20)
+    ]
+
+    request = ClassificationRequest.model_validate(payload)
+
+    assert len(request.history) == 10
+    assert request.history[0].content == "message-10"
+    assert request.history[-1].content == "message-19"
 
 
 def test_reporter_can_be_classified_as_ml_without_authorizing_execution(monkeypatch) -> None:

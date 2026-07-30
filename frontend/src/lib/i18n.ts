@@ -406,7 +406,24 @@ const messages = {
 
 export type TranslationKey = keyof typeof messages.tr;
 const hasLocalStorage = browser && typeof globalThis.localStorage !== 'undefined';
-const initial = hasLocalStorage && globalThis.localStorage.getItem('kozmik-locale') === 'en' ? 'en' : 'tr';
+const loginLocale = browser
+  ? document.cookie
+      .split('; ')
+      .find((cookie) => cookie.startsWith('kozmik-login-locale='))
+      ?.split('=')[1]
+  : undefined;
+const storedLocale = hasLocalStorage
+  ? globalThis.localStorage.getItem('kozmik-locale')
+  : undefined;
+const initial: Locale = loginLocale === 'tr' || loginLocale === 'en'
+  ? loginLocale
+  : storedLocale === 'en'
+    ? 'en'
+    : 'tr';
+if (hasLocalStorage && (loginLocale === 'tr' || loginLocale === 'en')) {
+  globalThis.localStorage.setItem('kozmik-locale', loginLocale);
+  document.cookie = 'kozmik-login-locale=; Max-Age=0; Path=/; SameSite=Lax';
+}
 export const locale = writable<Locale>(initial);
 export const t = derived(locale, ($locale) => (key: TranslationKey, vars?: Record<string, unknown>) => {
   let value: string = messages[$locale][key];

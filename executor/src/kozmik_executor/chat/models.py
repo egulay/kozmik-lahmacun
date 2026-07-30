@@ -100,11 +100,15 @@ class ClassificationRequest(ContractModel):
     language: str = Field(pattern=r"^[a-z]{2}(-[A-Z]{2})?$")
     capabilities: list[str] = Field(max_length=3)
     user_request: str = Field(min_length=1, max_length=4_000)
-    history: list[HistoryMessage] = Field(max_length=10)
+    # Accept the bounded chat-stream envelope and reduce it to the smaller
+    # classification context below. This keeps rolling Java/Python upgrades
+    # compatible without allowing an unbounded prompt.
+    history: list[HistoryMessage] = Field(max_length=20)
     entities: list[EntityMetadata] = Field(default_factory=list, max_length=50)
 
     @model_validator(mode="after")
     def bounded_input(self) -> "ClassificationRequest":
+        self.history = self.history[-10:]
         total = len(self.user_request) + sum(len(message.content) for message in self.history)
         if total > 8_000:
             raise ValueError("classification context exceeds character bound")

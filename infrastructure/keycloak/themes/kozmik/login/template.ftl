@@ -18,7 +18,8 @@
     </#list>
   </#if>
 </head>
-<body class="kozmik-auth ${bodyClass}">
+<body class="kozmik-auth ${bodyClass}"
+      data-login-locale="${locale.currentLanguageTag!'en'}">
   <main class="kozmik-auth-shell">
     <section class="kozmik-card" aria-labelledby="kozmik-page-title">
       <header class="kozmik-card-header">

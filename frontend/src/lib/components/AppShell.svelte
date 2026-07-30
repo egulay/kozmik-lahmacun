@@ -15,7 +15,7 @@
   } from '@lucide/svelte';
   import type { Snippet } from 'svelte';
   import { onMount } from 'svelte';
-  import { locale, setLocale, t } from '$lib/i18n';
+  import { locale, setLocale, statusLabel, t } from '$lib/i18n';
   import { currentUser, hasRole, primaryRole } from '$lib/session';
   import { api } from '$lib/api';
   import { deletingExecutionIds } from '$lib/execution-deletion';
@@ -56,6 +56,7 @@
   });
   let healthTimer: ReturnType<typeof setInterval> | undefined;
   let executionTimer: ReturnType<typeof setInterval> | undefined;
+  let systemTheme: MediaQueryList | undefined;
   let passwordDialogOpen = $state(false);
   let passwordEmailSending = $state(false);
   let passwordEmailSent = $state(false);
@@ -76,6 +77,10 @@
   });
 
   onMount(() => {
+    systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
+    applyPreferredTheme();
+    systemTheme.addEventListener('change', applySystemTheme);
+
     void (async () => {
       await Promise.all([
         loadChatTree(true),
@@ -95,8 +100,24 @@
       window.removeEventListener('focus', refreshTrees);
       window.removeEventListener('kozmik:execution-deleted', onExecutionDeleted);
       window.removeEventListener('kozmik:chat-thread-deleted', onChatThreadDeleted);
+      systemTheme?.removeEventListener('change', applySystemTheme);
     };
   });
+
+  function applyPreferredTheme() {
+    const preference = localStorage.getItem('kozmik-theme-preference');
+    dark =
+      preference === 'dark' ||
+      ((preference !== 'light' && preference !== 'dark') && Boolean(systemTheme?.matches));
+    document.documentElement.classList.toggle('dark', dark);
+  }
+
+  function applySystemTheme(event: MediaQueryListEvent) {
+    const preference = localStorage.getItem('kozmik-theme-preference');
+    if (preference === 'light' || preference === 'dark') return;
+    dark = event.matches;
+    document.documentElement.classList.toggle('dark', dark);
+  }
 
   async function loadChatTree(reset = false) {
     if (chatTreeLoading || (!reset && chatTreeLast)) return;
@@ -263,7 +284,7 @@
   function toggleTheme() {
     dark = !dark;
     document.documentElement.classList.toggle('dark', dark);
-    localStorage.setItem('kozmik-theme', dark ? 'dark' : 'light');
+    localStorage.setItem('kozmik-theme-preference', dark ? 'dark' : 'light');
   }
 
   function active(href: string) {
@@ -539,7 +560,9 @@
                   </Badge>
                 {/snippet}
               </Tooltip.Trigger>
-              <Tooltip.Content>{serviceStatuses[service[0]] ?? 'UNKNOWN'}</Tooltip.Content>
+              <Tooltip.Content>
+                {statusLabel(serviceStatuses[service[0]] ?? 'UNKNOWN', $locale)}
+              </Tooltip.Content>
             </Tooltip.Root>
           {/each}
         </div>

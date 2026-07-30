@@ -12,6 +12,7 @@ import io.gulay.execution.ReportPlanningException;
 import io.gulay.security.PlatformRole;
 
 import java.text.Normalizer;
+import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -27,6 +28,9 @@ import org.springframework.stereotype.Component;
 @Component
 @Slf4j
 public class ChatStreamCoordinator {
+    private static final int MAX_CLASSIFICATION_HISTORY_MESSAGES = 10;
+    private static final int MAX_CLASSIFICATION_CONTEXT_CHARACTERS = 8_000;
+
     private final PythonChatClient client;
     private final ChatService chatService;
     private final ChatStreamHub hub;
@@ -66,9 +70,7 @@ public class ChatStreamCoordinator {
                     .map(entity -> metadata(
                             entity, keycloakUserId, roles, request.language()))
                     .toList();
-            val history = request.history().size() <= 1
-                    ? List.<PythonChatContracts.HistoryMessage>of()
-                    : request.history().subList(0, request.history().size() - 1);
+            val history = classificationHistory(request.history(), userRequest);
             val classification = client.classify(
                     new PythonChatContracts.ClassificationRequest(
                             "1.0", request.requestId(), request.correlationId(),
@@ -87,6 +89,25 @@ public class ChatStreamCoordinator {
         } catch (Exception exception) {
             fail(request, "CHAT_CLASSIFICATION_OR_PLANNING_FAILED", exception);
         }
+    }
+
+    private List<PythonChatContracts.HistoryMessage> classificationHistory(
+            List<PythonChatContracts.HistoryMessage> requestHistory, String userRequest) {
+        val selected = new ArrayDeque<PythonChatContracts.HistoryMessage>();
+        var characters = userRequest.length();
+        // The last history item is the current user request and is supplied separately.
+        for (var index = requestHistory.size() - 2;
+             index >= 0 && selected.size() < MAX_CLASSIFICATION_HISTORY_MESSAGES;
+             index--) {
+            val message = requestHistory.get(index);
+            if (characters + message.content().length()
+                    > MAX_CLASSIFICATION_CONTEXT_CHARACTERS) {
+                break;
+            }
+            selected.addFirst(message);
+            characters += message.content().length();
+        }
+        return List.copyOf(selected);
     }
 
     private PythonChatContracts.EntityMetadata metadata(

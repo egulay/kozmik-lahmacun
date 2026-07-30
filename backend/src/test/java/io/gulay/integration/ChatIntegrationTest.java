@@ -15,6 +15,7 @@ import io.gulay.user.data.repository.AppUserReferenceRepository;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -251,6 +252,33 @@ class ChatIntegrationTest {
         assertThat(last.streamRequest().history()).hasSize(20);
         assertThat(last.streamRequest().history().get(0).content()).isEqualTo("answer-1");
         assertThat(last.streamRequest().history().get(19).content()).isEqualTo("message-11");
+    }
+
+    @Test
+    void boundsClassificationHistoryToPythonContract() throws Exception {
+        val classified = new AtomicReference<PythonChatContracts.ClassificationRequest>();
+        doAnswer(invocation -> {
+            val request = (PythonChatContracts.ClassificationRequest) invocation.getArgument(0);
+            classified.set(request);
+            return new PythonChatContracts.ClassificationResponse(
+                    "1.0", request.requestId(), request.correlationId(),
+                    "CONVERSATIONAL", null, "mock", "mock-v1");
+        }).when(pythonClient).classify(any());
+        val thread = chatService.createThread(owner.getKeycloakUserId(),
+                new ChatDtos.CreateThreadRequest("Long conversation", "en"));
+        for (var index = 0; index < 12; index++) {
+            val posted = chatService.post(thread.id(), owner.getKeycloakUserId(),
+                    new ChatDtos.PostMessageRequest("message-" + index, "en"));
+            chatService.complete(posted.response().assistantMessage().id(),
+                    "answer-" + index, "mock", "mock-v1");
+        }
+
+        postMessage(thread.id(), owner, "latest question");
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(classified.get()).isNotNull());
+        assertThat(classified.get().history()).hasSize(10);
+        assertThat(classified.get().history().get(9).content()).isEqualTo("answer-11");
     }
 
     private UUID createThread(AppUserReferenceModel user) throws Exception {
