@@ -189,13 +189,17 @@ class ResultExplainer:
                     "Do not claim a forecast, causal effect, or guaranteed outcome unless "
                     "approved scenario facts directly establish it. "
                     "Write one short paragraph of at most 80 words. "
+                    "Return only the paragraph text. Do not add headings, labels, Markdown, "
+                    "'Decision Summary', 'Approved Warnings', or a warnings section. "
                     "Do not infer identifiers, people, customers, raw rows, or unsupported causes. "
                     + language_instruction)},
                 {"role": "user", "content": json.dumps(
                     facts.model_dump(by_alias=True, mode="json"),
                     separators=(",", ":"), ensure_ascii=False)},
             ]
-            text = await self._complete(provider, messages)
+            text = self._clean_management_summary(
+                await self._complete(provider, messages)
+            )
             if not text:
                 raise ProviderError("LLM_SUMMARY_EMPTY")
             violations = self._management_violations(text)
@@ -210,7 +214,9 @@ class ResultExplainer:
                         f"{', '.join(violations)}. Discuss business meaning only. Do not add "
                         "facts, uses, recommendations, probabilities, or forecasts.")},
                 ]
-                text = await self._complete(provider, repair_messages)
+                text = self._clean_management_summary(
+                    await self._complete(provider, repair_messages)
+                )
             remaining_violations = (
                 self._management_violations(text)
                 + self._grounding_violations(text, facts)
@@ -234,7 +240,9 @@ class ResultExplainer:
                         "or implementation details.\n\nFact-grounded draft:\n"
                         f"{grounded_draft}")},
                 ]
-                text = await self._complete(provider, guided_messages)
+                text = self._clean_management_summary(
+                    await self._complete(provider, guided_messages)
+                )
             final_violations = (
                 self._management_violations(text)
                 + self._grounding_violations(text, facts)
@@ -257,6 +265,25 @@ class ResultExplainer:
                 type(exception).__name__,
             )
             return ExplanationOutcome(status="FAILED")
+
+    @staticmethod
+    def _clean_management_summary(text: str) -> str:
+        """Remove provider-added presentation labels from manager-facing prose."""
+        cleaned = re.sub(
+            r"^\s*(?:\*\*)?(?:decision summary|management summary|"
+            r"karar özeti|yönetici özeti)(?:\*\*)?\s*:?\s*",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.split(
+            r"\s*(?:\*\*)?(?:approved warnings|onaylı uyarılar)"
+            r"(?:\*\*)?\s*:?\s*",
+            cleaned,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+        return cleaned.replace("**", "").replace("__", "").strip()
 
     @staticmethod
     def _approved_drivers(result: dict[str, Any]) -> list[ApprovedDriver]:

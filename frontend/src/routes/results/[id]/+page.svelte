@@ -22,7 +22,13 @@
   import DeleteExecutionButton from '$lib/components/DeleteExecutionButton.svelte';
   import PdfExportButton from '$lib/components/PdfExportButton.svelte';
   import type { Execution } from '$lib/types';
-  import { formatDate, formatDisplayValue, humanizeField } from '$lib/utils';
+  import {
+    formatDate,
+    formatDisplayValue,
+    formatManagementSummary,
+    formatTemporalBucket,
+    humanizeField
+  } from '$lib/utils';
 
   let result = $state<ExecutionResult | null>(null);
   let execution = $state<Execution | null>(null);
@@ -92,6 +98,16 @@
     return payload && typeof payload === 'object'
       ? payload as Record<string, unknown>
       : {};
+  });
+  const temporalGranularities = $derived.by(() => {
+    if (!Array.isArray(orderPayload.temporalGroupBy)) return {} as Record<string, string>;
+    return Object.fromEntries(orderPayload.temporalGroupBy.flatMap((value) => {
+      if (!value || typeof value !== 'object') return [];
+      const group = value as Record<string, unknown>;
+      return typeof group.alias === 'string' && typeof group.granularity === 'string'
+        ? [[group.alias, group.granularity]]
+        : [];
+    }));
   });
   const tunedAlgorithm = $derived.by(() => {
     if (!Array.isArray(result?.kpis)) return null;
@@ -277,6 +293,17 @@
     return `${columnDisplayName(source)}: ${category}`;
   }
 
+  function formatResultValue(value: unknown, column: string): string {
+    const granularity = temporalGranularities[column];
+    return granularity
+      ? formatTemporalBucket(value, granularity)
+      : formatDisplayValue(
+          value,
+          $locale === 'tr' ? 'tr-TR' : 'en-US',
+          columnTypes[column]
+        );
+  }
+
   function normalizeCharts(value: unknown): Array<{
     title: string;
     summary: string;
@@ -325,11 +352,18 @@
         ? previewRows.map((row) => row[item.categoryField as string])
             .filter((value) => value != null)
         : [];
+      const categoryField = typeof item.categoryField === 'string'
+        ? item.categoryField
+        : undefined;
       const rawLabels = ((
         item.labels
         ?? item.categories
         ?? (previewCategories.length ? previewCategories : fallbackFeatures)
-      ) as unknown[]).map(String);
+      ) as unknown[]).map((label) =>
+        categoryField && temporalGranularities[categoryField]
+          ? formatTemporalBucket(label, temporalGranularities[categoryField])
+          : String(label)
+      );
       const rawValues = (item.values ?? item.data ?? nestedSeries[0]?.data ?? []) as number[];
       const retainedIndexes = rawLabels.flatMap((_, labelIndex) => {
         if (!normalizedChartId.includes('featureimportance')) return [labelIndex];
@@ -351,40 +385,74 @@
       );
       const values = retainedIndexes.map((labelIndex) => rawValues[labelIndex]);
       const provided = item.option as EChartsOption | undefined;
-      const series = nestedSeries.length
-        ? nestedSeries.map((entry) => {
-            const entryData = Array.isArray(entry.data) ? entry.data : [];
-            return {
-              name: String(entry.name ?? '').toLowerCase() === 'importance'
-                ? $t('importance')
-                : humanizeField(String(entry.name ?? ''), $locale === 'tr' ? 'tr-TR' : 'en-US'),
-              type: String(item.type ?? '').toUpperCase() === 'LINE' ? 'line' : 'bar',
-              data: retainedIndexes.map((labelIndex) => entryData[labelIndex])
-            };
-          })
-        : [{
-            type: String(item.type ?? '').toUpperCase() === 'LINE' ? 'line' : 'bar',
-            data: values
-          }];
-      const generatedOption = {
-        tooltip: { trigger: 'axis' },
-        grid: {
-          left: 40,
-          right: 16,
-          top: 18,
-          bottom: normalizedChartId.includes('whatifanalysis') ? 92 : 48
-        },
-        xAxis: {
-          type: 'category',
-          data: labels,
-          axisLabel: {
-            rotate: labels.length > 4 || labels.some((label) => label.length > 18) ? 25 : 0,
-            interval: 0
-          }
-        },
-        yAxis: { type: 'value' },
-        series
-      } as EChartsOption;
+      const chartType = String(item.type ?? '').toUpperCase();
+      const generatedOption = chartType === 'PIE'
+        ? {
+            tooltip: { trigger: 'item' },
+            legend: {
+              type: 'scroll',
+              bottom: 0
+            },
+            series: [{
+              name: nestedSeries.length
+                ? humanizeField(
+                    String(nestedSeries[0].name ?? ''),
+                    $locale === 'tr' ? 'tr-TR' : 'en-US'
+                  )
+                : title,
+              type: 'pie',
+              radius: ['38%', '68%'],
+              center: ['50%', '44%'],
+              avoidLabelOverlap: true,
+              data: labels.map((label, labelIndex) => ({
+                name: label,
+                value: Number(
+                  nestedSeries.length && Array.isArray(nestedSeries[0].data)
+                    ? nestedSeries[0].data[retainedIndexes[labelIndex]]
+                    : values[labelIndex] ?? 0
+                )
+              }))
+            }]
+          } as EChartsOption
+        : {
+            tooltip: { trigger: 'axis' },
+            legend: nestedSeries.length > 1
+              ? { type: 'scroll', top: 0 }
+              : undefined,
+            grid: {
+              left: 40,
+              right: 16,
+              top: nestedSeries.length > 1 ? 42 : 18,
+              bottom: normalizedChartId.includes('whatifanalysis') ? 92 : 48
+            },
+            xAxis: {
+              type: 'category',
+              data: labels,
+              axisLabel: {
+                rotate: labels.length > 4 || labels.some((label) => label.length > 18) ? 25 : 0,
+                interval: 0
+              }
+            },
+            yAxis: { type: 'value' },
+            series: nestedSeries.length
+              ? nestedSeries.map((entry) => {
+                  const entryData = Array.isArray(entry.data) ? entry.data : [];
+                  return {
+                    name: String(entry.name ?? '').toLowerCase() === 'importance'
+                      ? $t('importance')
+                      : humanizeField(
+                          String(entry.name ?? ''),
+                          $locale === 'tr' ? 'tr-TR' : 'en-US'
+                        ),
+                    type: chartType === 'LINE' ? 'line' : 'bar',
+                    data: retainedIndexes.map((labelIndex) => entryData[labelIndex])
+                  };
+                })
+              : [{
+                  type: chartType === 'LINE' ? 'line' : 'bar',
+                  data: values
+                }]
+          } as EChartsOption;
       return {
         title,
         summary: String(item.summary ?? `${title}: ${values.slice(0, 5).join(', ')}`),
@@ -510,16 +578,10 @@
 
   <Card.Root class="mb-6">
     <Card.Header>
-      <div class="flex w-full items-center justify-between gap-4">
-        <div>
-          <Card.Description>{$t('summary')}</Card.Description>
-          <Card.Title>{$t('resultReady')}</Card.Title>
-        </div>
-        <StatusBadge status={result.summaryStatus} />
-      </div>
+      <Card.Description>{$t('summary')}</Card.Description>
     </Card.Header>
     <Card.Content>
-    {#if result.managementSummary}<p class="w-full text-base leading-relaxed">{result.managementSummary}</p>
+    {#if result.managementSummary}<p class="w-full text-base leading-relaxed">{formatManagementSummary(result.managementSummary)}</p>
     {:else if result.summaryStatus === 'FAILED'}
       <Alert.Root><TriangleAlert /><Alert.Description>{$t('summaryFailed')}</Alert.Description></Alert.Root>
     {:else}<p class="text-sm text-muted-foreground">{$t('summaryPending')}</p>{/if}
@@ -589,7 +651,7 @@
       {#if previewRows.length}
         <div class="overflow-x-auto">
           <Table.Root><Table.Header><Table.Row>{#each columns as column}<Table.Head>{columnLabels[column] ?? humanizeField(column, $locale === 'tr' ? 'tr-TR' : 'en-US')}</Table.Head>{/each}</Table.Row></Table.Header><Table.Body>
-            {#each previewRows as row}<Table.Row>{#each columns as column}<Table.Cell>{formatDisplayValue(row[column], $locale === 'tr' ? 'tr-TR' : 'en-US', columnTypes[column])}</Table.Cell>{/each}</Table.Row>{/each}
+            {#each previewRows as row}<Table.Row>{#each columns as column}<Table.Cell>{formatResultValue(row[column], column)}</Table.Cell>{/each}</Table.Row>{/each}
           </Table.Body></Table.Root>
         </div>
       {:else}<p class="text-sm text-muted-foreground">{$t('noData')}</p>{/if}

@@ -74,6 +74,35 @@ export function formatDisplayValue(
 	return String(value);
 }
 
+export function formatTemporalBucket(value: unknown, granularity?: string) {
+	if (value === null || value === undefined || value === "") return "—";
+	const text = String(value);
+	const isoDate = /^(\d{4})-(\d{2})-(\d{2})/.exec(text);
+	if (!isoDate) return text;
+	const normalizedGranularity = granularity?.toUpperCase();
+	if (normalizedGranularity === "YEAR") return isoDate[1];
+	if (normalizedGranularity === "QUARTER") {
+		return `${isoDate[1]}-Q${Math.floor((Number(isoDate[2]) - 1) / 3) + 1}`;
+	}
+	if (normalizedGranularity === "MONTH") return `${isoDate[1]}-${isoDate[2]}`;
+	return `${isoDate[1]}-${isoDate[2]}-${isoDate[3]}`;
+}
+
+export function formatManagementSummary(value: string) {
+	return value
+		.replace(
+			/^\s*(?:\*\*)?(?:decision summary|management summary|karar özeti|yönetici özeti)(?:\*\*)?\s*:?\s*/i,
+			"",
+		)
+		.split(
+			/\s*(?:\*\*)?(?:approved warnings|onaylı uyarılar)(?:\*\*)?\s*:?\s*/i,
+			1,
+		)[0]
+		.replaceAll("**", "")
+		.replaceAll("__", "")
+		.trim();
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type WithoutChild<T> = T extends { child?: any } ? Omit<T, "child"> : T;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

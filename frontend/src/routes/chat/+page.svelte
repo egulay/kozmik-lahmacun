@@ -191,18 +191,21 @@
   async function sendMessage() {
     const content = message.trim();
     if (!content || !selected || sending) return;
+    const threadId = selected;
     sending = true;
     error = '';
+    message = '';
+    sessionStorage.removeItem(`${draftPrefix}${threadId}`);
     try {
-      const posted = await api.postMessage(selected, content, $locale);
+      const posted = await api.postMessage(threadId, content, $locale);
+      if (selected !== threadId) return;
       messages = [...messages, posted.userMessage, posted.assistantMessage];
       liveMessage = posted.assistantMessage;
-      message = '';
-      sessionStorage.removeItem(`${draftPrefix}${selected}`);
       await scrollToLatest();
-      connectStream(selected, posted.assistantMessage.id);
+      connectStream(threadId, posted.assistantMessage.id);
     } catch {
       error = $t('apiUnavailable');
+      if (selected === threadId && !message) message = content;
     } finally {
       sending = false;
     }
@@ -265,7 +268,7 @@
 
   async function scrollToLatest() {
     await tick();
-    messageEnd?.scrollIntoView({ block: 'end', behavior: 'smooth' });
+    messageEnd?.scrollIntoView({ block: 'end', behavior: 'auto' });
   }
 </script>
 
@@ -370,10 +373,10 @@
         bind:value={message}
         rows={2}
         placeholder={$t('messagePlaceholder')}
-        disabled={!selected || sending}
+        disabled={!selected}
         onkeydown={onComposerKeydown}
       />
-      <Button class="h-12 shrink-0" type="submit" disabled={!selected || !message.trim() || sending} aria-label={$t('send')}>
+      <Button class="h-12 min-w-28 shrink-0" type="submit" disabled={!selected || !message.trim() || sending} aria-label={$t('send')}>
         <Send size={17} /> {sending ? $t('sending') : $t('send')}
       </Button>
       </form>

@@ -130,6 +130,43 @@ def test_nested_boolean_filters_having_and_multiple_order_fields(spark):
     ]
 
 
+def test_grouped_bar_chart_uses_second_grouping_dimension_as_series():
+    order = ReportOrder.model_validate({
+        "schemaVersion": "1.0", "executionType": "REPORT",
+        "entityId": str(uuid4()),
+        "requestedLanguage": "en", "requestSummary": "Sales by region and channel",
+        "constraints": {"maxPreviewRows": 100, "timeoutSeconds": 30},
+        "payload": {
+            "select": [{"column": "region"}, {"column": "channel"}],
+            "filters": [], "groupBy": ["region", "channel"],
+            "aggregations": [{
+                "function": "SUM", "column": "net_amount", "alias": "total_net_sales",
+            }],
+            "orderBy": [{"column": "region", "direction": "ASC"}],
+            "limit": 100,
+            "chartHints": [{
+                "chartType": "BAR", "categoryColumn": "region",
+                "valueColumn": "total_net_sales",
+            }],
+        },
+    })
+    rows = [
+        {"region": "Ege", "channel": "WEB", "total_net_sales": 10},
+        {"region": "Ege", "channel": "STORE", "total_net_sales": 20},
+        {"region": "Marmara", "channel": "WEB", "total_net_sales": 30},
+        {"region": "Marmara", "channel": "STORE", "total_net_sales": 40},
+    ]
+
+    chart = SparkReportExecutor._charts(order, rows)[0]
+
+    assert chart["categories"] == ["Ege", "Marmara"]
+    assert chart["seriesField"] == "channel"
+    assert chart["series"] == [
+        {"name": "WEB", "data": [10, 30]},
+        {"name": "STORE", "data": [20, 40]},
+    ]
+
+
 def test_natural_language_string_filters_are_case_insensitive(spark):
     frame = spark.createDataFrame([
         ("Marmara", "ONLINE", 5, 100),

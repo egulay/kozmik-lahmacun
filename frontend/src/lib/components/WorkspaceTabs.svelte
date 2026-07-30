@@ -49,46 +49,48 @@
 {#if $workspaceTabs.length}
   <Tabs.Root
     value={activeValue}
-    class="border-b px-4 pt-2"
+    class="w-full min-w-0 overflow-hidden border-b px-4 pt-2"
     aria-label={$t('openExecutions')}
   >
-    <Tabs.List class="h-auto max-w-full justify-start overflow-x-auto" variant="line">
-      {#each $workspaceTabs as tab (value(tab))}
-        <div class="flex shrink-0 items-center">
-          <Tooltip.Provider>
-            <Tooltip.Root>
-              <Tooltip.Trigger>
-                {#snippet child({ props })}
-                  <Tabs.Trigger
-                    {...props}
-                    value={value(tab)}
-                    class="max-w-52 gap-2"
-                    onclick={() => goto(href(tab))}
-                  >
-                    <ExecutionTypeIcon
-                      kind={tab.kind}
-                      status={tab.status}
-                      context={tab.tabType}
-                    />
-                    <span class="truncate">{tab.title}</span>
-                  </Tabs.Trigger>
-                {/snippet}
-              </Tooltip.Trigger>
-              <Tooltip.Content class="max-w-sm whitespace-normal">
-                {tab.title} · {tab.status}
-              </Tooltip.Content>
-            </Tooltip.Root>
-          </Tooltip.Provider>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label={`${$t('closeTab')}: ${tab.title}`}
-            onclick={(event) => close(event, tab)}
-          >
-            <X />
-          </Button>
-        </div>
-      {/each}
-    </Tabs.List>
+    <div class="w-full min-w-0 overflow-x-auto overscroll-x-contain">
+      <Tabs.List class="h-auto min-w-max justify-start" variant="line">
+        {#each $workspaceTabs as tab (value(tab))}
+          <div class="flex shrink-0 items-center">
+            <Tooltip.Provider>
+              <Tooltip.Root>
+                <Tooltip.Trigger>
+                  {#snippet child({ props })}
+                    <Tabs.Trigger
+                      {...props}
+                      value={value(tab)}
+                      class="max-w-52 gap-2"
+                      onclick={() => goto(href(tab))}
+                    >
+                      <ExecutionTypeIcon
+                        kind={tab.kind}
+                        status={tab.status}
+                        context={tab.tabType}
+                      />
+                      <span class="truncate">{tab.title}</span>
+                    </Tabs.Trigger>
+                  {/snippet}
+                </Tooltip.Trigger>
+                <Tooltip.Content class="max-w-sm whitespace-normal">
+                  {tab.title} · {tab.status}
+                </Tooltip.Content>
+              </Tooltip.Root>
+            </Tooltip.Provider>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label={`${$t('closeTab')}: ${tab.title}`}
+              onclick={(event) => close(event, tab)}
+            >
+              <X />
+            </Button>
+          </div>
+        {/each}
+      </Tabs.List>
+    </div>
   </Tabs.Root>
 {/if}

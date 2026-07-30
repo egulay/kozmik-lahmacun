@@ -302,12 +302,53 @@ class SparkReportExecutor:
 
     @staticmethod
     def _charts(order: ReportOrder, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [
-            {"chartId": f"chart-{index + 1}", "type": hint.chart_type,
-             "titleKey": "result.chart.report", "categoryField": hint.category_column,
-             "categories": [row.get(hint.category_column) for row in rows],
-             "series": [{"name": hint.value_column,
-                         "data": [row.get(hint.value_column) for row in rows]}]}
-            for index, hint in enumerate(order.payload.chart_hints)
-            if hint.category_column and hint.value_column
+        charts = []
+        grouped_dimensions = [
+            *order.payload.group_by,
+            *(item.alias for item in order.payload.temporal_group_by),
         ]
+        for index, hint in enumerate(order.payload.chart_hints):
+            category = hint.category_column
+            value = hint.value_column
+            if not category or not value:
+                continue
+            series_field = next(
+                (
+                    dimension for dimension in grouped_dimensions
+                    if dimension != category
+                    and any(row.get(dimension) is not None for row in rows)
+                ),
+                None,
+            )
+            categories = list(dict.fromkeys(row.get(category) for row in rows))
+            if hint.chart_type in {"BAR", "LINE"} and series_field:
+                series_names = list(dict.fromkeys(
+                    row.get(series_field) for row in rows
+                ))
+                values = {
+                    (row.get(category), row.get(series_field)): row.get(value)
+                    for row in rows
+                }
+                series = [
+                    {
+                        "name": name,
+                        "data": [values.get((category_name, name))
+                                 for category_name in categories],
+                    }
+                    for name in series_names
+                ]
+            else:
+                series = [{
+                    "name": value,
+                    "data": [row.get(value) for row in rows],
+                }]
+            charts.append({
+                "chartId": f"chart-{index + 1}",
+                "type": hint.chart_type,
+                "titleKey": "result.chart.report",
+                "categoryField": category,
+                "seriesField": series_field,
+                "categories": categories,
+                "series": series,
+            })
+        return charts

@@ -515,7 +515,7 @@
     </Sidebar.Footer>
     <Sidebar.Rail />
   </Sidebar.Root>
-  <Sidebar.Inset>
+  <Sidebar.Inset class="min-w-0 overflow-x-hidden">
     <header class="flex h-14 shrink-0 items-center gap-2 border-b px-4">
       <Sidebar.Trigger aria-label={$t('menu')} />
       <Sidebar.Separator orientation="vertical" class="mr-2 h-4" />
@@ -581,10 +581,10 @@
         </Button>
       </div>
     </header>
-    <div class="pdf-navigation-tabs">
+    <div class="pdf-navigation-tabs w-full min-w-0">
       <WorkspaceTabs />
     </div>
-    <main id="main-content" tabindex="-1" class="mx-auto w-full max-w-screen-2xl p-4 md:p-6">{@render children()}</main>
+    <main id="main-content" tabindex="-1" class="mx-auto w-full min-w-0 max-w-screen-2xl p-4 md:p-6">{@render children()}</main>
   </Sidebar.Inset>
 </Sidebar.Provider>
 

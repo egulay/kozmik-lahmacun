@@ -1,5 +1,5 @@
 import { browser } from '$app/environment';
-import { writable } from 'svelte/store';
+import { get, writable } from 'svelte/store';
 
 export interface WorkspaceTab {
   executionId: string;
@@ -56,4 +56,19 @@ export function closeWorkspaceTab(tabType: WorkspaceTab['tabType'], executionId:
 
 export function closeExecutionWorkspace(executionId: string) {
   workspaceTabs.update((tabs) => tabs.filter((item) => item.executionId !== executionId));
+}
+
+export async function reconcileWorkspaceTabs(
+  exists: (tab: WorkspaceTab) => Promise<boolean>
+): Promise<WorkspaceTab[]> {
+  const tabs = get(workspaceTabs);
+  const checks = await Promise.all(tabs.map(async (tab) => ({
+    tab,
+    exists: await exists(tab)
+  })));
+  const retained = checks.filter((check) => check.exists).map((check) => check.tab);
+  workspaceTabs.set(retained);
+  return tabs.filter((tab) => !retained.some(
+    (item) => item.tabType === tab.tabType && item.executionId === tab.executionId
+  ));
 }

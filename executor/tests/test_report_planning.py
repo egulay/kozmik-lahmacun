@@ -108,6 +108,93 @@ def test_monthly_report_normalizes_bounded_date_filter_and_validates():
     assert order.payload.temporal_group_by[0].granularity.value == "MONTH"
 
 
+def test_monthly_report_normalizes_invented_month_alias():
+    planning_request = request().model_copy(update={
+        "user_request": (
+            "Show monthly total net sales from January through December 2026, "
+            "ordered chronologically. Include a line chart."
+        ),
+    })
+    raw = {
+        "schemaVersion": "1.0", "executionType": "REPORT",
+        "entityId": str(planning_request.authorized_schema.entity_id),
+        "requestedLanguage": "en", "requestSummary": "Monthly net sales",
+        "constraints": {"maxPreviewRows": 100, "timeoutSeconds": 60},
+        "payload": {
+            "select": [{"column": "sales_month", "displayLabel": "Sales month"}],
+            "filters": [{
+                "column": "sale_date", "operator": "BETWEEN",
+                "values": ["2026-01-01", "2026-12-31"],
+            }],
+            "groupBy": ["sales_month"],
+            "temporalGroupBy": [],
+            "aggregations": [{
+                "function": "SUM", "column": "amount", "alias": "total_net_sales",
+            }],
+            "orderBy": [{"column": "sales_month", "direction": "ASC"}],
+            "limit": 100,
+            "chartHints": [{
+                "chartType": "LINE", "categoryColumn": "sales_month",
+                "valueColumn": "total_net_sales",
+            }],
+        },
+    }
+
+    class Provider:
+        async def complete_json(self, system_prompt: str, user_prompt: str) -> dict:
+            return raw
+
+    order = asyncio.run(_generate_report_order(Provider(), planning_request))
+
+    assert order.payload.group_by == []
+    assert order.payload.select[0].column == "sale_date"
+    assert order.payload.select[0].alias == "sales_month"
+    assert order.payload.temporal_group_by[0].column == "sale_date"
+    assert order.payload.temporal_group_by[0].granularity.value == "MONTH"
+    assert order.payload.temporal_group_by[0].alias == "sales_month"
+
+
+def test_monthly_report_removes_redundant_daily_group_and_exposes_month_alias():
+    planning_request = request()
+    raw = {
+        "schemaVersion": "1.0", "executionType": "REPORT",
+        "entityId": str(planning_request.authorized_schema.entity_id),
+        "requestedLanguage": "en", "requestSummary": "Monthly net sales",
+        "constraints": {"maxPreviewRows": 100, "timeoutSeconds": 60},
+        "payload": {
+            "select": [{
+                "column": "sale_date", "alias": "sale_date",
+                "displayLabel": "Sale Date",
+            }],
+            "filters": [], "groupBy": ["sale_date"],
+            "temporalGroupBy": [{
+                "column": "sale_date", "granularity": "MONTH", "alias": "month",
+                "displayLabel": "Month",
+            }],
+            "aggregations": [{
+                "function": "SUM", "column": "amount", "alias": "total_net_sales",
+            }],
+            "orderBy": [{"column": "month", "direction": "ASC"}],
+            "limit": 100,
+            "chartHints": [{
+                "chartType": "LINE", "categoryColumn": "month",
+                "valueColumn": "total_net_sales",
+            }],
+        },
+    }
+
+    class Provider:
+        async def complete_json(self, system_prompt: str, user_prompt: str) -> dict:
+            return raw
+
+    order = asyncio.run(_generate_report_order(Provider(), planning_request))
+
+    assert order.payload.group_by == []
+    assert order.payload.select[0].column == "sale_date"
+    assert order.payload.select[0].alias == "month"
+    assert order.payload.select[0].display_label == "Month"
+
+
 def test_temporal_grouping_rejects_non_temporal_column():
     planning_request = request()
     raw = {

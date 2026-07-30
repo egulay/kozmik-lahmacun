@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { formatDisplayValue, humanizeField } from './utils';
+import {
+  formatDisplayValue,
+  formatManagementSummary,
+  formatTemporalBucket,
+  humanizeField
+} from './utils';
 
 describe('result presentation formatting', () => {
   it('formats governed decimal values without machine precision noise', () => {
@@ -14,5 +19,17 @@ describe('result presentation formatting', () => {
   it('humanizes technical result aliases', () => {
     expect(humanizeField('total_sales', 'en-US')).toBe('Total sales');
     expect(humanizeField('AVG_DISCOUNT_RATE', 'en-US')).toBe('Average discount rate');
+  });
+
+  it('formats governed temporal buckets at their requested granularity', () => {
+    expect(formatTemporalBucket('2026-01-01T00:00:00', 'MONTH')).toBe('2026-01');
+    expect(formatTemporalBucket('2026-04-01T00:00:00', 'QUARTER')).toBe('2026-Q2');
+    expect(formatTemporalBucket('2026-01-01T00:00:00', 'YEAR')).toBe('2026');
+  });
+
+  it('removes provider template labels from management summaries', () => {
+    expect(formatManagementSummary(
+      '**Decision Summary** Web led sales. **Approved Warnings** None'
+    )).toBe('Web led sales.');
   });
 });

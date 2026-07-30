@@ -199,6 +199,17 @@ def test_plain_language_ml_prediction_wording_is_not_rejected_as_technical():
     assert ResultExplainer._management_violations(summary) == []
 
 
+def test_management_summary_removes_provider_template_labels_and_markdown():
+    summary = (
+        "**Decision Summary** Web generated the highest net sales. "
+        "**Approved Warnings** None"
+    )
+
+    assert ResultExplainer._clean_management_summary(summary) == (
+        "Web generated the highest net sales."
+    )
+
+
 def test_what_if_warning_is_not_repeated_in_management_summary():
     facts = SummaryFacts.model_validate({
         "executionType": "ML", "language": "en", "rowCount": 100,

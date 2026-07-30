@@ -53,6 +53,8 @@ async def _generate_report_order(provider, request: ReportPlanningRequest) -> Re
         raw = await provider.complete_json(SYSTEM_PROMPT, prompt)
         try:
             _normalize_between_filters(raw)
+            _normalize_explicit_temporal_grouping(raw)
+            _normalize_implicit_temporal_grouping(raw, request)
             order = ReportOrder.model_validate(raw)
             validate_order(order, request)
             return order
@@ -126,6 +128,131 @@ def _normalize_between_filters(raw: object) -> None:
 
     visit(payload.get("filters"))
     visit(payload.get("having"))
+
+
+def _normalize_explicit_temporal_grouping(raw: object) -> None:
+    """Make an explicit calendar bucket the selected and grouped output."""
+    if not isinstance(raw, dict):
+        return
+    payload = raw.get("payload")
+    if not isinstance(payload, dict):
+        return
+    temporal_groups = payload.get("temporalGroupBy")
+    selected = payload.get("select")
+    group_by = payload.get("groupBy")
+    if (
+        not isinstance(temporal_groups, list)
+        or not isinstance(selected, list)
+        or not isinstance(group_by, list)
+    ):
+        return
+
+    for temporal in temporal_groups:
+        if not isinstance(temporal, dict):
+            continue
+        source = temporal.get("column")
+        alias = temporal.get("alias")
+        if not isinstance(source, str) or not isinstance(alias, str):
+            continue
+        same_source_groups = [
+            item for item in temporal_groups
+            if isinstance(item, dict) and item.get("column") == source
+        ]
+        source_selections = [
+            item for item in selected
+            if isinstance(item, dict) and item.get("column") == source
+        ]
+        if len(same_source_groups) != 1 or len(source_selections) != 1:
+            continue
+        source_selections[0]["alias"] = alias
+        if temporal.get("displayLabel"):
+            source_selections[0]["displayLabel"] = temporal["displayLabel"]
+        payload["groupBy"] = [
+            value for value in payload["groupBy"] if value != source
+        ]
+
+
+def _normalize_implicit_temporal_grouping(
+    raw: object,
+    request: ReportPlanningRequest,
+) -> None:
+    """Translate a common LLM-derived calendar alias into the governed contract."""
+    if not isinstance(raw, dict):
+        return
+    payload = raw.get("payload")
+    if not isinstance(payload, dict) or payload.get("temporalGroupBy"):
+        return
+    group_by = payload.get("groupBy")
+    selected = payload.get("select")
+    if not isinstance(group_by, list) or not isinstance(selected, list):
+        return
+
+    authorized_names = {
+        column.column_name for column in request.authorized_schema.columns
+    }
+    temporal_sources = [
+        column.column_name
+        for column in request.authorized_schema.columns
+        if column.data_type.value in {"DATE", "TIMESTAMP"}
+    ]
+    if len(temporal_sources) != 1:
+        return
+
+    granularity_words = {
+        "day": "DAY",
+        "daily": "DAY",
+        "week": "WEEK",
+        "weekly": "WEEK",
+        "month": "MONTH",
+        "monthly": "MONTH",
+        "quarter": "QUARTER",
+        "quarterly": "QUARTER",
+        "year": "YEAR",
+        "yearly": "YEAR",
+    }
+    candidates: list[tuple[str, str]] = []
+    for value in group_by:
+        if not isinstance(value, str) or value in authorized_names:
+            continue
+        tokens = set(re.split(r"[^a-z]+", value.lower()))
+        matching = {
+            granularity
+            for word, granularity in granularity_words.items()
+            if word in tokens
+        }
+        if len(matching) == 1:
+            candidates.append((value, matching.pop()))
+    if len(candidates) != 1:
+        return
+
+    alias, granularity = candidates[0]
+    matching_select = [
+        item for item in selected
+        if isinstance(item, dict)
+        and (item.get("column") == alias or item.get("alias") == alias)
+    ]
+    if len(matching_select) != 1:
+        return
+
+    source = temporal_sources[0]
+    matching_select[0]["column"] = source
+    matching_select[0]["alias"] = alias
+    payload["groupBy"] = [value for value in group_by if value != alias]
+    payload["temporalGroupBy"] = [{
+        "column": source,
+        "granularity": granularity,
+        "alias": alias,
+        **(
+            {"displayLabel": matching_select[0]["displayLabel"]}
+            if matching_select[0].get("displayLabel") else {}
+        ),
+    }]
+    logger.info(
+        "report_order_temporal_alias_normalized alias=%s source=%s granularity=%s",
+        alias,
+        source,
+        granularity,
+    )
 
 
 async def _generate_ml_order(provider, request: ReportPlanningRequest) -> MlOrder:
