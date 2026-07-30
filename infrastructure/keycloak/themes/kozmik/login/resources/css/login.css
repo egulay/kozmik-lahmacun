@@ -1,0 +1,368 @@
+:root {
+  color-scheme: light;
+  --background: #fff;
+  --foreground: #252525;
+  --card: #fff;
+  --muted: #f5f5f5;
+  --muted-foreground: #737373;
+  --border: #e5e5e5;
+  --primary: #343434;
+  --primary-foreground: #fafafa;
+  --ring: #a3a3a3;
+  --destructive: #dc2626;
+  --destructive-background: #fef2f2;
+  --destructive-border: #fecaca;
+  --radius: .625rem;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+
+body.kozmik-auth {
+  color: var(--foreground);
+  background: var(--background);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+.kozmik-auth-shell {
+  display: grid;
+  min-height: 100vh;
+  padding: 24px;
+  place-items: center;
+}
+
+.kozmik-card {
+  width: min(448px, 100%);
+  overflow: hidden;
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) * 1.4);
+  box-shadow: 0 1px 2px rgb(0 0 0 / .04), 0 8px 24px rgb(0 0 0 / .06);
+}
+
+.kozmik-card-header {
+  display: grid;
+  gap: 8px;
+  padding: 24px 24px 16px;
+  text-align: center;
+}
+
+.kozmik-mark {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  margin: 0 auto 4px;
+  color: var(--primary-foreground);
+  background: var(--primary);
+  border-radius: var(--radius);
+  font-size: 16px;
+  font-weight: 700;
+  place-items: center;
+}
+
+.kozmik-brand {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  line-height: 16px;
+  text-transform: uppercase;
+}
+
+.kozmik-card h1 {
+  margin: 0;
+  color: var(--foreground);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -.025em;
+  line-height: 28px;
+}
+
+.kozmik-description {
+  margin: 0 auto;
+  max-width: 360px;
+  color: var(--muted-foreground);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.kozmik-languages {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 24px 12px;
+}
+
+.kozmik-languages a {
+  padding: 4px 8px;
+  color: var(--muted-foreground);
+  border-radius: calc(var(--radius) * .8);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.kozmik-languages a:hover,
+.kozmik-languages a.active {
+  color: var(--foreground);
+  background: var(--muted);
+}
+
+.kozmik-card-content {
+  padding: 8px 24px 24px;
+}
+
+.kozmik-card-footer {
+  padding: 16px 24px;
+  color: var(--muted-foreground);
+  background: var(--muted);
+  border-top: 1px solid var(--border);
+  text-align: center;
+}
+
+.kozmik-form,
+.kozmik-field,
+.kozmik-actions,
+.kozmik-social {
+  display: grid;
+}
+
+.kozmik-form {
+  gap: 16px;
+}
+
+.kozmik-field {
+  gap: 8px;
+}
+
+.kozmik-field label,
+.kozmik-label-row {
+  color: var(--foreground);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.kozmik-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.kozmik-label-row a {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.kozmik-field input[type="text"],
+.kozmik-field input[type="email"],
+.kozmik-field input[type="password"] {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 12px;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 2px rgb(0 0 0 / .03);
+  font: inherit;
+  outline: none;
+}
+
+.kozmik-field input:focus {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px rgb(163 163 163 / .2);
+}
+
+.kozmik-field input[aria-invalid="true"] {
+  border-color: var(--destructive);
+}
+
+.kozmik-password {
+  position: relative;
+}
+
+.kozmik-password input {
+  padding-right: 44px !important;
+}
+
+.kozmik-password-toggle {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  display: grid;
+  width: 40px;
+  height: 38px;
+  padding: 0;
+  color: var(--muted-foreground);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius);
+  cursor: pointer;
+  place-items: center;
+}
+
+.kozmik-password-toggle:hover {
+  color: var(--foreground);
+  background: var(--muted);
+}
+
+.kozmik-field-error {
+  margin: 0;
+  color: var(--destructive);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.kozmik-password-policy {
+  margin: -4px 0 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.kozmik-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.kozmik-checkbox input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.kozmik-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  width: 100%;
+  padding: 8px 16px;
+  color: var(--primary-foreground);
+  background: var(--primary);
+  border: 1px solid var(--primary);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 2px rgb(0 0 0 / .05);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.kozmik-button:hover {
+  opacity: .92;
+}
+
+.kozmik-button:focus-visible,
+.kozmik-password-toggle:focus-visible,
+a:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--ring) 35%, transparent);
+  outline-offset: 2px;
+}
+
+.kozmik-button-secondary {
+  color: var(--foreground);
+  background: var(--background);
+  border-color: var(--border);
+}
+
+.kozmik-button-secondary:hover {
+  background: var(--muted);
+}
+
+.kozmik-actions,
+.kozmik-social {
+  gap: 8px;
+}
+
+.kozmik-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  text-align: center;
+}
+
+.kozmik-divider::before,
+.kozmik-divider::after {
+  height: 1px;
+  background: var(--border);
+  content: "";
+  flex: 1;
+}
+
+.kozmik-alert {
+  margin: 0 24px 12px;
+  padding: 12px;
+  color: var(--foreground);
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.kozmik-alert-error {
+  color: var(--destructive);
+  background: var(--destructive-background);
+  border-color: var(--destructive-border);
+}
+
+a {
+  color: var(--foreground);
+  text-underline-offset: 3px;
+}
+
+@media (max-width: 520px) {
+  .kozmik-auth-shell {
+    padding: 16px;
+  }
+
+  .kozmik-card-header,
+  .kozmik-card-content {
+    padding-inline: 20px;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --background: #252525;
+    --foreground: #fafafa;
+    --card: #343434;
+    --muted: #444;
+    --muted-foreground: #a3a3a3;
+    --border: rgb(255 255 255 / 10%);
+    --primary: #e5e5e5;
+    --primary-foreground: #343434;
+    --ring: #737373;
+    --destructive: #f87171;
+    --destructive-background: rgb(220 38 38 / .12);
+    --destructive-border: rgb(220 38 38 / .35);
+  }
+
+  .kozmik-card {
+    box-shadow: 0 1px 2px rgb(0 0 0 / .2), 0 8px 24px rgb(0 0 0 / .22);
+  }
+}

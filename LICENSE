@@ -1,0 +1,80 @@
+Kozmik Lahmacun Source-Available Evaluation License
+SPDX-License-Identifier: LicenseRef-Kozmik-Lahmacun-Evaluation-1.0
+
+Copyright © 2026 Emre Gülay (emre@gulay.io). All rights reserved.
+
+1. Nature of this Software
+
+Kozmik Lahmacun is source-available proprietary software, not open-source
+software. The repository may be downloaded, built, and run in unmodified
+form for personal, non-commercial learning, testing, and evaluation.
+
+"Unmodified form" means the source code, build configuration, and
+dependencies as published, excluding only the locally generated
+environment configuration and test data described in Section 2. Public
+GitHub viewing or forking does not grant any usage rights beyond those
+described in this license.
+
+2. Permitted Adjustments
+
+Locally generated environment configuration and test data may be adjusted
+only as necessary to evaluate the unmodified Software.
+
+3. Restricted Uses
+
+Commercial use, production use, source-code modification, derivative
+works, redistribution, resale, hosting, and integration into another
+product or service require prior written permission from the copyright
+holder.
+
+4. Termination
+
+Any use of the Software beyond the scope described in this license
+automatically terminates the rights granted herein. Upon termination,
+all copying, execution, and distribution of the Software must cease
+immediately. Termination does not waive any other remedies available to
+the copyright holder.
+
+5. No Patent Grant
+
+No patent rights are granted under this license, whether by implication,
+estoppel, or otherwise.
+
+6. Disclaimer of Warranty
+
+THE SOFTWARE IS PROVIDED "AS IS," WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES,
+OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE,
+ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+7. Governing Law
+
+This license is governed by the laws of the Republic of Türkiye, without
+regard to its conflict-of-law principles. Any dispute arising under this
+license shall be subject to the exclusive jurisdiction of the competent
+courts of Türkiye.
+
+8. Why a Custom License
+
+The SPDX custom-license identifier LicenseRef-Kozmik-Lahmacun-Evaluation-1.0
+is used because the required combination — non-commercial evaluation with
+no source modification or redistribution — is incompatible with the Open
+Source Definition (https://opensource.org/osd). Creative Commons also does
+not recommend its licenses for software
+(https://creativecommons.org/faq/#can-i-apply-a-creative-commons-license-to-software).
+
+9. Basis of Protection
+
+Copyright protection arises automatically under applicable law; it does
+not depend on selecting a public template or registering with any
+institution. This license records the limited permissions granted to
+repository users and is intended to apply internationally, including in
+Türkiye. Türkiye is a contracting party to the Berne Convention
+(https://www.wipo.int/treaties/en/ShowResults.jsp?treaty_id=15).
+
+10. Permission Requests
+
+Permission and commercial-license requests may be sent to emre@gulay.io.

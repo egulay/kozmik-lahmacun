@@ -1,0 +1,35 @@
+.DS_Store
+.env
+.idea/
+*.iml
+
+# Private implementation handoff; deliberately excluded from public repositories
+analysis/
+
+# Java
+backend/target/
+backend/.m2/
+.m2/
+backend/logs/
+logs/
+
+# Python
+executor/.pytest_cache/
+executor/.ruff_cache/
+executor/.venv/
+executor/.runtime/
+executor/__pycache__/
+executor/**/*.py[cod]
+**/__pycache__/
+**/*.py[cod]
+
+# Frontend
+frontend/.svelte-kit/
+frontend/build/
+frontend/node_modules/
+frontend/test-results/
+frontend/playwright-report/
+frontend/.npm/
+
+# Reproducible demo outputs
+demo/generated/

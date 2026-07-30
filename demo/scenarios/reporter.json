@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "1.0",
+  "role": "REPORTER",
+  "scenarios": [
+    {
+      "language": "tr",
+      "entity": "sales",
+      "request": "Bölgelere göre toplam net satışları azalan sırada raporla."
+    },
+    {
+      "language": "en",
+      "entity": "cdr",
+      "request": "Show average call duration and total charges by origin region and call type."
+    }
+  ]
+}

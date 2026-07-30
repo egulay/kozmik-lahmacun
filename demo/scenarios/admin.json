@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "1.0",
+  "role": "ADMIN",
+  "scenario": {
+    "configuration": "Update an execution limit through Java",
+    "restart": "Confirm the signed, short-lived executor restart",
+    "acceptance": [
+      "Python enters drain mode",
+      "replayed nonce is rejected",
+      "Docker restarts the process",
+      "effective configuration is reloaded from Java before readiness"
+    ]
+  }
+}

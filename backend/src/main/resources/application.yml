@@ -1,0 +1,156 @@
+spring:
+  application:
+    name: kozmik-backend
+  config:
+    import: ${SPRING_CONFIG_IMPORT:optional:vault://}
+  cloud:
+    vault:
+      uri: ${VAULT_ADDR:http://localhost:8200}
+      authentication: TOKEN
+      token: ${VAULT_TOKEN}
+      connection-timeout: 5000
+      read-timeout: 5000
+      fail-fast: true
+      kv:
+        enabled: true
+        backend: secret
+        application-name: ${SPRING_CLOUD_VAULT_KV_APPLICATION_NAME:kozmik-backend}
+        default-context: ${SPRING_CLOUD_VAULT_KV_DEFAULT_CONTEXT:kozmik-backend}
+  datasource:
+    hikari:
+      schema: ${DATABASE_SCHEMA:kozmik_lahmacun}
+      maximum-pool-size: ${DATABASE_POOL_MAX_SIZE:10}
+      minimum-idle: ${DATABASE_POOL_MIN_IDLE:2}
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    schemas: ${DATABASE_SCHEMA:kozmik_lahmacun}
+    default-schema: ${DATABASE_SCHEMA:kozmik_lahmacun}
+    create-schemas: true
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        default_schema: ${DATABASE_SCHEMA:kozmik_lahmacun}
+        jdbc:
+          time_zone: UTC
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: ${REDIS_TIMEOUT:2s}
+      repositories:
+        enabled: false
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      acks: all
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        request.timeout.ms: 10000
+        delivery.timeout.ms: 30000
+    consumer:
+      group-id: ${KAFKA_JAVA_GROUP_ID:kozmik-java-control-plane-v1}
+      enable-auto-commit: false
+      auto-offset-reset: earliest
+    listener:
+      ack-mode: record
+  session:
+    timeout: ${SESSION_TIMEOUT:30m}
+    data:
+      redis:
+        namespace: kozmik:session
+        repository-type: indexed
+        cleanup-cron: "0 * * * * *"
+  security:
+    oauth2:
+      client:
+        registration:
+          keycloak:
+            client-id: ${KEYCLOAK_CLIENT_ID:kozmik-backend}
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            scope:
+              - openid
+              - profile
+              - email
+        provider:
+          keycloak:
+            issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8081/realms/kozmik}
+            authorization-uri: ${KEYCLOAK_AUTHORIZATION_URI:http://localhost:8081/realms/kozmik/protocol/openid-connect/auth}
+            token-uri: ${KEYCLOAK_TOKEN_URI:http://localhost:8081/realms/kozmik/protocol/openid-connect/token}
+            jwk-set-uri: ${KEYCLOAK_JWK_SET_URI:http://localhost:8081/realms/kozmik/protocol/openid-connect/certs}
+            user-info-uri: ${KEYCLOAK_USER_INFO_URI:http://localhost:8081/realms/kozmik/protocol/openid-connect/userinfo}
+            user-name-attribute: sub
+
+server:
+  forward-headers-strategy: framework
+  servlet:
+    session:
+      cookie:
+        name: KOZMIK_SESSION
+        http-only: true
+        secure: ${SESSION_COOKIE_SECURE:true}
+        same-site: lax
+      tracking-modes: cookie
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+  health:
+    defaults:
+      enabled: true
+
+kozmik:
+  ingestion:
+    system-keycloak-user-id: ${INGESTION_SYSTEM_KEYCLOAK_USER_ID:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3}
+  execution:
+    timeout-seconds: ${EXECUTION_TIMEOUT_SECONDS:1800}
+    max-concurrent-jobs: ${SPARK_MAX_CONCURRENT_JOBS:8}
+    max-preview-rows: ${EXECUTION_MAX_PREVIEW_ROWS:100}
+    dataset-uri: ${EXECUTION_DATASET_URI:}
+    dataset-format: ${EXECUTION_DATASET_FORMAT:parquet}
+  security:
+    mutation-rate-limit-per-minute: ${MUTATION_RATE_LIMIT_PER_MINUTE:60}
+  keycloak:
+    realm-url: ${KEYCLOAK_REALM_URL:http://localhost:8081/realms/kozmik}
+    user-operation-retry-ms: ${KEYCLOAK_USER_OPERATION_RETRY_MS:10000}
+    action-email-client-id: ${KEYCLOAK_ACTION_EMAIL_CLIENT_ID:kozmik-backend}
+    action-email-redirect-uri: ${KEYCLOAK_ACTION_EMAIL_REDIRECT_URI:http://localhost:5173}
+    action-email-lifespan-seconds: ${KEYCLOAK_ACTION_EMAIL_LIFESPAN_SECONDS:900}
+  python:
+    base-url: ${PYTHON_BASE_URL:http://localhost:8000}
+  retention:
+    cron: ${RETENTION_CRON:0 17 2 * * *}
+    hard-delete-cron: ${RETENTION_HARD_DELETE_CRON:0 0 0 * * *}
+    hard-delete-days: ${RETENTION_HARD_DELETE_DAYS:30}
+    chat-days: ${RETENTION_CHAT_DAYS:30}
+    preview-days: ${RETENTION_PREVIEW_DAYS:30}
+    artifact-days: ${RETENTION_ARTIFACT_DAYS:90}
+    execution-days: ${RETENTION_EXECUTION_DAYS:90}
+  kafka:
+    command-topic: ${KAFKA_EXECUTION_COMMAND_TOPIC:execution.commands.v1}
+    event-topic: ${KAFKA_EXECUTION_EVENT_TOPIC:execution.events.v1}
+    result-topic: ${KAFKA_EXECUTION_RESULT_TOPIC:execution.results.v1}
+    control-topic: ${KAFKA_EXECUTION_CONTROL_TOPIC:execution.control.v1}
+    ingestion-status-topic: ${KAFKA_INGESTION_STATUS_TOPIC:ingestion.status.v1}
+    stream-status-topic: ${KAFKA_STREAM_STATUS_TOPIC:ingestion.stream.status.v1}
+    publish-max-attempts: ${KAFKA_PUBLISH_MAX_ATTEMPTS:5}
+  llm:
+    provider: ${LLM_PROVIDER:LM_STUDIO}
+    base-url: ${LLM_BASE_URL:http://localhost:1234/v1}
+    model: ${LLM_MODEL:local-model}
+    timeout-seconds: ${LLM_TIMEOUT_SECONDS:60}
+    max-retries: ${LLM_MAX_RETRIES:2}
+    max-context-messages: ${LLM_MAX_CONTEXT_MESSAGES:20}
+    max-context-characters: ${LLM_MAX_CONTEXT_CHARACTERS:12000}

@@ -1,0 +1,82 @@
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
+
+export function cn(...inputs: ClassValue[]) {
+	return twMerge(clsx(inputs));
+}
+
+export function formatDate(value?: string | null, locale = "tr-TR") {
+	if (!value) return "—";
+	return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(
+		new Date(value),
+	);
+}
+
+export function formatDuration(
+	start?: string | null,
+	end?: string | null,
+	locale = "en-US",
+) {
+	if (!start) return "—";
+	const milliseconds = new Date(end ?? Date.now()).getTime() - new Date(start).getTime();
+	const formatUnit = (value: number, unit: "millisecond" | "second" | "minute") =>
+		new Intl.NumberFormat(locale, {
+			style: "unit",
+			unit,
+			unitDisplay: "short",
+			maximumFractionDigits: 0,
+		}).format(value);
+	if (milliseconds < 1_000) return formatUnit(Math.max(0, milliseconds), "millisecond");
+	if (milliseconds < 60_000) return formatUnit(Math.round(milliseconds / 1_000), "second");
+	return formatUnit(Math.round(milliseconds / 60_000), "minute");
+}
+
+export function humanizeField(value: string, locale = "en-US") {
+	const replacements: Record<string, Record<string, string>> = {
+		"en-US": { avg: "Average", total: "Total", count: "Count", rate: "rate" },
+		"tr-TR": { avg: "Ortalama", total: "Toplam", count: "Sayı", rate: "oranı" },
+	};
+	const dictionary = replacements[locale] ?? replacements["en-US"];
+	const words = value
+		.replace(/^result\.(kpi|metric)\./, "")
+		.split(/[_\s.]+/)
+		.filter(Boolean)
+		.map((word) => dictionary[word.toLowerCase()] ?? word.toLowerCase());
+	if (!words.length) return value;
+	const label = words.join(" ");
+	return label.charAt(0).toLocaleUpperCase(locale) + label.slice(1);
+}
+
+export function formatDisplayValue(
+	value: unknown,
+	locale = "en-US",
+	dataType?: string,
+) {
+	if (value === null || value === undefined || value === "") return "—";
+	const numericString =
+		typeof value === "string"
+		&& /^-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(value.trim());
+	const numericType = dataType
+		? /^(BYTE|SHORT|INT|INTEGER|LONG|FLOAT|DOUBLE|DECIMAL|NUMBER)/i.test(dataType)
+		: typeof value === "number" || numericString;
+	const numericValue =
+		typeof value === "number"
+			? value
+			: numericType && typeof value === "string" && value.trim() !== ""
+				? Number(value)
+				: Number.NaN;
+	if (numericType && Number.isFinite(numericValue)) {
+		return new Intl.NumberFormat(locale, {
+			maximumFractionDigits: 4,
+			minimumFractionDigits: 0,
+		}).format(numericValue);
+	}
+	return String(value);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type WithoutChild<T> = T extends { child?: any } ? Omit<T, "child"> : T;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type WithoutChildren<T> = T extends { children?: any } ? Omit<T, "children"> : T;
+export type WithoutChildrenOrChild<T> = WithoutChildren<WithoutChild<T>>;
+export type WithElementRef<T, U extends HTMLElement = HTMLElement> = T & { ref?: U | null };

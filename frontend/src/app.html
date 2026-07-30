@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    %sveltekit.head%
+  </head>
+  <body data-sveltekit-preload-data="hover">
+    <script>
+      try {
+        const theme = localStorage.getItem('kozmik-theme');
+        if (theme === 'dark' || (!theme && matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark');
+        }
+      } catch {}
+    </script>
+    <div style="display: contents">%sveltekit.body%</div>
+  </body>
+</html>

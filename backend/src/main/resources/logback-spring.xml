@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <springProperty name="SERVICE" source="spring.application.name"
+                  defaultValue="kozmik-backend"/>
+  <property name="LOG_DIR" value="${JAVA_LOG_DIR:-logs/java}"/>
+  <property name="LOG_PATTERN"
+            value="timestamp=%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} service=${SERVICE} level=%-5level correlationId=%X{correlationId:--} thread=%thread logger=%logger{40} message=%msg%n%ex"/>
+
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>${LOG_PATTERN}</pattern>
+      <charset>UTF-8</charset>
+    </encoder>
+  </appender>
+
+  <appender name="DAILY_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+      <fileNamePattern>${LOG_DIR}/%d{yyyy-MM, aux}/%d{yyyy-MM-dd}.log</fileNamePattern>
+      <maxHistory>${LOG_MAX_HISTORY_DAYS:-90}</maxHistory>
+      <totalSizeCap>${LOG_TOTAL_SIZE_CAP:-2GB}</totalSizeCap>
+      <cleanHistoryOnStart>true</cleanHistoryOnStart>
+    </rollingPolicy>
+    <encoder>
+      <pattern>${LOG_PATTERN}</pattern>
+      <charset>UTF-8</charset>
+    </encoder>
+  </appender>
+
+  <root level="${LOG_LEVEL:-INFO}">
+    <appender-ref ref="CONSOLE"/>
+    <appender-ref ref="DAILY_FILE"/>
+  </root>
+</configuration>

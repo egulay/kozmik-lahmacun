@@ -1,0 +1,148 @@
+{
+  "realm": "kozmik",
+  "enabled": true,
+  "displayName": "Kozmik Lahmacun",
+  "loginTheme": "kozmik",
+  "emailTheme": "kozmik",
+  "internationalizationEnabled": true,
+  "supportedLocales": ["en", "tr"],
+  "defaultLocale": "en",
+  "attributes": {
+    "frontendUrl": "http://localhost:8081"
+  },
+  "smtpServer": {
+    "host": "${SMTP_HOST}",
+    "port": "${SMTP_PORT}",
+    "from": "${SMTP_FROM}",
+    "fromDisplayName": "${SMTP_FROM_DISPLAY_NAME}",
+    "auth": "${SMTP_AUTH}",
+    "starttls": "${SMTP_STARTTLS}",
+    "ssl": "${SMTP_SSL}",
+    "user": "${SMTP_USERNAME}",
+    "password": "${SMTP_PASSWORD}"
+  },
+  "registrationAllowed": false,
+  "editUsernameAllowed": true,
+  "resetPasswordAllowed": true,
+  "loginWithEmailAllowed": true,
+  "bruteForceProtected": true,
+  "maxFailureWaitSeconds": 900,
+  "minimumQuickLoginWaitSeconds": 60,
+  "waitIncrementSeconds": 60,
+  "quickLoginCheckMilliSeconds": 1000,
+  "maxDeltaTimeSeconds": 43200,
+  "failureFactor": 5,
+  "passwordPolicy": "length(8) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1)",
+  "roles": {
+    "realm": [
+      {
+        "name": "REPORTER",
+        "description": "May create and view governed reports"
+      },
+      {
+        "name": "SCIENTIST",
+        "description": "May run governed analytical and ML workflows",
+        "composite": true,
+        "composites": {
+          "realm": ["REPORTER"]
+        }
+      },
+      {
+        "name": "ADMIN",
+        "description": "May administer the local platform",
+        "composite": true,
+        "composites": {
+          "realm": ["REPORTER", "SCIENTIST"]
+        }
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "kozmik-backend",
+      "name": "Kozmik Java Backend",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${KEYCLOAK_BACKEND_CLIENT_SECRET}",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "redirectUris": [
+        "http://localhost:8080/login/oauth2/code/keycloak",
+        "http://localhost:5173/login/oauth2/code/keycloak",
+        "http://localhost:5173/*"
+      ],
+      "webOrigins": [
+        "http://localhost:5173"
+      ],
+      "attributes": {
+        "post.logout.redirect.uris": "http://localhost:5173/*",
+        "pkce.code.challenge.method": "S256"
+      },
+      "protocol": "openid-connect"
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-kozmik-backend",
+      "enabled": true,
+      "serviceAccountClientId": "kozmik-backend",
+      "clientRoles": {
+        "realm-management": ["query-users", "view-users", "manage-users", "view-realm"]
+      }
+    },
+    {
+      "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
+      "username": "reporter",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Demo",
+      "lastName": "Reporter",
+      "email": "reporter@kozmik.local",
+      "realmRoles": ["REPORTER"],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${DEMO_REPORTER_PASSWORD}",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2",
+      "username": "scientist",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Demo",
+      "lastName": "Scientist",
+      "email": "scientist@kozmik.local",
+      "realmRoles": ["SCIENTIST"],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${DEMO_SCIENTIST_PASSWORD}",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3",
+      "username": "admin",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Demo",
+      "lastName": "Admin",
+      "email": "admin@kozmik.local",
+      "realmRoles": ["ADMIN"],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "${DEMO_ADMIN_PASSWORD}",
+          "temporary": false
+        }
+      ]
+    }
+  ],
+  "sslRequired": "external"
+}

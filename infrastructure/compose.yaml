@@ -1,0 +1,481 @@
+name: ${COMPOSE_PROJECT_NAME:?Run scripts/setup-env.sh first}
+
+services:
+  vault:
+    image: hashicorp/vault:1.20.4
+    command:
+      - server
+      - -dev
+      - -dev-listen-address=0.0.0.0:8200
+      - -dev-root-token-id=${VAULT_DEV_ROOT_TOKEN_ID:?required}
+    environment:
+      VAULT_ADDR: http://127.0.0.1:8200
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN_ID:?required}
+    ports:
+      - "127.0.0.1:${VAULT_PORT:-8200}:8200"
+    cap_add: [IPC_LOCK]
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    restart: unless-stopped
+    networks: [kozmik]
+
+  vault-init:
+    image: hashicorp/vault:1.20.4
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN_ID:?required}
+      VAULT_BACKEND_TOKEN: ${VAULT_BACKEND_TOKEN:?required}
+      VAULT_EXECUTOR_TOKEN: ${VAULT_EXECUTOR_TOKEN:?required}
+      POSTGRES_DB: ${POSTGRES_DB:?required}
+      POSTGRES_USER: ${POSTGRES_USER:?required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:?required}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?required}
+      KEYCLOAK_BACKEND_CLIENT_SECRET: ${KEYCLOAK_BACKEND_CLIENT_SECRET:?required}
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:?required}
+      KAFKA_MESSAGE_SIGNING_KEY: ${KAFKA_MESSAGE_SIGNING_KEY:?required}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?required}
+      MINIO_EXECUTOR_USER: ${MINIO_EXECUTOR_USER:?required}
+      MINIO_EXECUTOR_PASSWORD: ${MINIO_EXECUTOR_PASSWORD:?required}
+      MINIO_INGEST_USER: ${MINIO_INGEST_USER:?required}
+      MINIO_INGEST_PASSWORD: ${MINIO_INGEST_PASSWORD:?required}
+      DEMO_REPORTER_PASSWORD: ${DEMO_REPORTER_PASSWORD:?required}
+      DEMO_SCIENTIST_PASSWORD: ${DEMO_SCIENTIST_PASSWORD:?required}
+      DEMO_ADMIN_PASSWORD: ${DEMO_ADMIN_PASSWORD:?required}
+      SMTP_HOST: ${SMTP_HOST:?required}
+      SMTP_PORT: ${SMTP_PORT:?required}
+      SMTP_FROM: ${SMTP_FROM:?required}
+      SMTP_FROM_DISPLAY_NAME: ${SMTP_FROM_DISPLAY_NAME:?required}
+      SMTP_AUTH: ${SMTP_AUTH:?required}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:?required}
+      SMTP_SSL: ${SMTP_SSL:?required}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      OPENAI_COMPATIBLE_API_KEY: ${OPENAI_COMPATIBLE_API_KEY:-}
+    depends_on:
+      vault:
+        condition: service_healthy
+    volumes:
+      - ./vault/init-secrets.sh:/opt/kozmik/init-secrets.sh:ro
+      - ./vault/backend-policy.hcl:/opt/kozmik/backend-policy.hcl:ro
+      - ./vault/executor-policy.hcl:/opt/kozmik/executor-policy.hcl:ro
+    entrypoint: ["/bin/sh", "/opt/kozmik/init-secrets.sh"]
+    restart: "no"
+    networks: [kozmik]
+
+  postgres:
+    image: postgres:16.4-alpine3.20
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?required}
+      POSTGRES_USER: ${POSTGRES_USER:?required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    networks: [kozmik]
+
+  postgres-init:
+    image: postgres:16.4-alpine3.20
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?required}
+      POSTGRES_USER: ${POSTGRES_USER:?required}
+      KEYCLOAK_DB: ${KEYCLOAK_DB:-keycloak}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./postgres/init-databases.sh:/opt/kozmik/init-databases.sh:ro
+    entrypoint: ["/bin/sh", "/opt/kozmik/init-databases.sh"]
+    restart: "no"
+    networks: [kozmik]
+
+  database-reset:
+    profiles: [full-demo]
+    image: postgres:16.4-alpine3.20
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?required}
+      POSTGRES_USER: ${POSTGRES_USER:?required}
+      POSTGRES_DB: ${POSTGRES_DB:?required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ../backend/src/main/resources:/opt/kozmik/resources:ro
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - >-
+        psql --host postgres --username "$${POSTGRES_USER}"
+        --dbname "$${POSTGRES_DB}"
+        --file /opt/kozmik/resources/ddl.sql &&
+        psql --host postgres --username "$${POSTGRES_USER}"
+        --dbname "$${POSTGRES_DB}"
+        --file /opt/kozmik/resources/local-demo-users.sql
+    restart: "no"
+    networks: [kozmik]
+
+  redis:
+    image: redis:7.2.5-alpine3.20
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?required}"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" --no-auth-warning ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+    restart: unless-stopped
+    networks: [kozmik]
+
+  kafka:
+    image: apache/kafka:3.9.1
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_LISTENERS: INTERNAL://:29092,CONTROLLER://:29093,EXTERNAL://:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:${KAFKA_PORT:-9092}
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_MESSAGE_MAX_BYTES: 5242880
+      KAFKA_REPLICA_FETCH_MAX_BYTES: 5242880
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    ports:
+      - "127.0.0.1:${KAFKA_PORT:-9092}:9092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+    networks: [kozmik]
+
+  kafka-init:
+    image: apache/kafka:3.9.1
+    depends_on:
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./kafka/init-topics.sh:/opt/kozmik/init-topics.sh:ro
+    entrypoint: ["/bin/bash", "/opt/kozmik/init-topics.sh"]
+    restart: "no"
+    networks: [kozmik]
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2024-07-16T23-46-41Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?required}
+      MINIO_NOTIFY_KAFKA_ENABLE_PRIMARY: "on"
+      MINIO_NOTIFY_KAFKA_BROKERS_PRIMARY: kafka:29092
+      MINIO_NOTIFY_KAFKA_TOPIC_PRIMARY: ingestion.events.v1
+      MINIO_NOTIFY_KAFKA_QUEUE_DIR_PRIMARY: /data/events
+      MINIO_NOTIFY_KAFKA_QUEUE_LIMIT_PRIMARY: "10000"
+    ports:
+      - "127.0.0.1:${MINIO_API_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    restart: unless-stopped
+    networks: [kozmik]
+
+  minio-init:
+    image: quay.io/minio/mc:RELEASE.2024-07-15T17-46-06Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?required}
+      MINIO_EXECUTOR_USER: ${MINIO_EXECUTOR_USER:?required}
+      MINIO_EXECUTOR_PASSWORD: ${MINIO_EXECUTOR_PASSWORD:?required}
+      MINIO_INGEST_USER: ${MINIO_INGEST_USER:?required}
+      MINIO_INGEST_PASSWORD: ${MINIO_INGEST_PASSWORD:?required}
+    volumes:
+      - ./minio/init-buckets.sh:/opt/kozmik/init-buckets.sh:ro
+      - ./minio/executor-policy.json:/opt/kozmik/executor-policy.json:ro
+      - ./minio/ingest-policy.json:/opt/kozmik/ingest-policy.json:ro
+    entrypoint: ["/bin/sh", "/opt/kozmik/init-buckets.sh"]
+    restart: "no"
+    networks: [kozmik]
+
+  mailpit:
+    image: axllent/mailpit:v1.30
+    environment:
+      MP_DATABASE: /data/mailpit.db
+      MP_MAX_MESSAGES: 5000
+      TZ: Europe/Istanbul
+    ports:
+      - "127.0.0.1:${MAILPIT_UI_PORT:-8025}:8025"
+      - "127.0.0.1:${MAILPIT_SMTP_PORT:-1025}:1025"
+    volumes:
+      - mailpit-data:/data
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+    networks: [kozmik]
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0.7
+    command:
+      - start
+      - --import-realm
+      - --http-enabled=true
+      - --hostname-strict=false
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:?required}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?required}
+      KC_HEALTH_ENABLED: "true"
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/${KEYCLOAK_DB:-keycloak}
+      KC_DB_USERNAME: ${POSTGRES_USER:?required}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      KEYCLOAK_BACKEND_CLIENT_SECRET: ${KEYCLOAK_BACKEND_CLIENT_SECRET:?required}
+      DEMO_REPORTER_PASSWORD: ${DEMO_REPORTER_PASSWORD:?required}
+      DEMO_SCIENTIST_PASSWORD: ${DEMO_SCIENTIST_PASSWORD:?required}
+      DEMO_ADMIN_PASSWORD: ${DEMO_ADMIN_PASSWORD:?required}
+      SMTP_HOST: ${SMTP_HOST:?required}
+      SMTP_PORT: ${SMTP_PORT:?required}
+      SMTP_FROM: ${SMTP_FROM:?required}
+      SMTP_FROM_DISPLAY_NAME: ${SMTP_FROM_DISPLAY_NAME:?required}
+      SMTP_AUTH: ${SMTP_AUTH:?required}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:?required}
+      SMTP_SSL: ${SMTP_SSL:?required}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+    ports:
+      - "127.0.0.1:${KEYCLOAK_PORT:-8081}:8080"
+    volumes:
+      - ./keycloak/kozmik-realm.json:/opt/keycloak/data/import/kozmik-realm.json:ro
+      - ./keycloak/themes/kozmik:/opt/keycloak/themes/kozmik:ro
+      - keycloak-data:/opt/keycloak/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mailpit:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "exec 3<>/dev/tcp/127.0.0.1/9000; printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3; grep -q '200 OK' <&3"
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+    networks: [kozmik]
+
+  backend:
+    profiles: [full-demo]
+    build:
+      context: ../backend
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_BACKEND_TOKEN:?required}
+      SPRING_CONFIG_IMPORT: vault://
+      SPRING_APPLICATION_NAME: kozmik-backend-container
+      SPRING_CLOUD_VAULT_KV_APPLICATION_NAME: kozmik-backend-container
+      SPRING_CLOUD_VAULT_KV_DEFAULT_CONTEXT: kozmik-backend-container
+      JAVA_TOOL_OPTIONS: >-
+        -Dspring.application.name=kozmik-backend-container
+        -Dspring.cloud.vault.kv.application-name=kozmik-backend-container
+        -Dspring.cloud.vault.kv.default-context=kozmik-backend-container
+      DATABASE_SCHEMA: kozmik_lahmacun
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KEYCLOAK_CLIENT_ID: kozmik-backend
+      KEYCLOAK_AUTHORIZATION_URI: http://localhost:${KEYCLOAK_PORT:-8081}/realms/kozmik/protocol/openid-connect/auth
+      KEYCLOAK_TOKEN_URI: http://keycloak:8080/realms/kozmik/protocol/openid-connect/token
+      KEYCLOAK_JWK_SET_URI: http://keycloak:8080/realms/kozmik/protocol/openid-connect/certs
+      KEYCLOAK_USER_INFO_URI: http://keycloak:8080/realms/kozmik/protocol/openid-connect/userinfo
+      KEYCLOAK_REALM_URL: http://keycloak:8080/realms/kozmik
+      INGESTION_SYSTEM_KEYCLOAK_USER_ID: ${INGESTION_SYSTEM_KEYCLOAK_USER_ID:-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3}
+      PYTHON_BASE_URL: http://executor:8000
+      LLM_PROVIDER: ${LLM_PROVIDER:-LM_STUDIO}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:1234/v1}
+      LLM_MODEL: ${LLM_MODEL:-qwen3-coder-30b-a3b-instruct}
+      SESSION_COOKIE_SECURE: "false"
+      SPRING_FLYWAY_BASELINE_ON_MIGRATE: "true"
+      # database-reset replays ddl.sql through V19 before application startup.
+      SPRING_FLYWAY_BASELINE_VERSION: "21"
+      JAVA_LOG_DIR: /var/log/kozmik/java
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_MAX_HISTORY_DAYS: ${LOG_MAX_HISTORY_DAYS:-90}
+      LOG_TOTAL_SIZE_CAP: ${LOG_TOTAL_SIZE_CAP:-2GB}
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8080}:8080"
+    volumes:
+      - backend-logs:/var/log/kozmik/java
+    depends_on:
+      vault:
+        condition: service_healthy
+      vault-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "exec 3<>/dev/tcp/127.0.0.1/8080; printf 'GET /actuator/health/liveness HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3; grep -q '200' <&3"
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+    restart: unless-stopped
+    networks: [kozmik]
+
+  executor:
+    profiles: [application, full-demo]
+    build:
+      context: ../executor
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_EXECUTOR_TOKEN:?required}
+      VAULT_EXECUTOR_SECRET_PATH: secret/data/kozmik-executor
+      JAVA_BASE_URL: ${EXECUTOR_JAVA_BASE_URL:-${JAVA_BASE_URL:-http://host.docker.internal:8080}}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_EXECUTION_COMMAND_TOPIC: execution.commands.v1
+      KAFKA_EXECUTION_CONTROL_TOPIC: execution.control.v1
+      KAFKA_EXECUTION_EVENT_TOPIC: execution.events.v1
+      KAFKA_EXECUTION_RESULT_TOPIC: execution.results.v1
+      MINIO_ENDPOINT: minio:9000
+      EXECUTION_EVENT_LEDGER_PATH: /var/lib/kozmik/execution-events.sqlite3
+      INGESTION_EVENT_LEDGER_PATH: /var/lib/kozmik/ingestion-events.sqlite3
+      STREAM_INGESTION_LEDGER_PATH: /var/lib/kozmik/stream-ingestion.sqlite3
+      EXECUTION_WORKER_ENABLED: "true"
+      INGESTION_WORKER_ENABLED: "true"
+      STREAM_INGESTION_WORKER_ENABLED: "true"
+      KAFKA_STREAM_INGESTION_TOPIC: ingestion.records.v1
+      KAFKA_STREAM_STATUS_TOPIC: ingestion.stream.status.v1
+      SPARK_MAX_CONCURRENT_JOBS: ${SPARK_MAX_CONCURRENT_JOBS:-8}
+      PYTHON_LOG_DIR: /var/log/kozmik/python
+      PYTHON_LOG_LEVEL: ${PYTHON_LOG_LEVEL:-INFO}
+    volumes:
+      - executor-state:/var/lib/kozmik
+      - executor-logs:/var/log/kozmik/python
+    ports:
+      - "127.0.0.1:${EXECUTOR_PORT:-8000}:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      vault:
+        condition: service_healthy
+      vault-init:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/internal/v1/liveness',timeout=3)\""
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: on-failure
+    stop_grace_period: 90s
+    networks: [kozmik]
+
+  frontend:
+    profiles: [full-demo]
+    build:
+      context: ../frontend
+    environment:
+      BACKEND_BASE_URL: http://backend:8080
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-5173}:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "wget --quiet --tries=1 --spider http://localhost:5173/"
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+    restart: unless-stopped
+    networks: [kozmik]
+
+networks:
+  kozmik:
+    name: ${COMPOSE_PROJECT_NAME}-network
+
+volumes:
+  postgres-data:
+    name: ${COMPOSE_PROJECT_NAME}-postgres-data
+  redis-data:
+    name: ${COMPOSE_PROJECT_NAME}-redis-data
+  kafka-data:
+    name: ${COMPOSE_PROJECT_NAME}-kafka-data
+  minio-data:
+    name: ${COMPOSE_PROJECT_NAME}-minio-data
+  keycloak-data:
+    name: ${COMPOSE_PROJECT_NAME}-keycloak-data
+  executor-state:
+    name: ${COMPOSE_PROJECT_NAME}-executor-state
+  backend-logs:
+    name: ${COMPOSE_PROJECT_NAME}-backend-logs
+  executor-logs:
+    name: ${COMPOSE_PROJECT_NAME}-executor-logs
+  mailpit-data:
+    name: ${COMPOSE_PROJECT_NAME}-mailpit-data

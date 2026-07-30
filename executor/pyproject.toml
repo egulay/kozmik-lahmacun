@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kozmik-executor"
+version = "0.1.0"
+description = "Kozmik Lahmacun executor foundation"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "aiokafka==0.12.0",
+  "fastapi==0.116.1",
+  "httpx==0.28.1",
+  "minio==7.2.15",
+  "numpy==2.3.2",
+  "pandas==2.3.3",
+  "pyarrow==21.0.0",
+  "pydantic==2.11.7",
+  "pyspark==4.0.0",
+  "uvicorn[standard]==0.35.0",
+  "xgboost[pyspark]==3.3.0",
+]
+
+[project.scripts]
+kozmik-execution-worker = "kozmik_executor.execution.worker:main"
+kozmik-ingestion-worker = "kozmik_executor.ingestion.worker:main"
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.4.1",
+  "ruff==0.12.7",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kozmik_executor"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
