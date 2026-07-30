@@ -12,7 +12,7 @@ pipelines. Reporters request controlled reports in natural language.
 Scientists and Administrators can additionally request predictive analysis,
 automatic model comparison, and bounded what-if evaluation.
 
-The platform's central privacy invariant is simple:
+The platform enforces the following privacy invariant:
 
 > Your underlying corporate datasets are never sent to or processed by the
 > LLM. They remain inside the controlled execution environment.
@@ -67,10 +67,10 @@ Natural-language request
   -> privacy-safe management explanation
 ```
 
-The user does not need to choose an estimator, write a join or aggregation,
-construct a Spark pipeline, interpret tuning trials, or translate technical
-metrics into management language. Technical details remain available to
-authorized users for traceability.
+Users do not need to select an estimator, construct filters or aggregations,
+build a Spark pipeline, interpret tuning trials, or translate technical
+metrics into management language. Authorized users retain access to technical
+execution details for traceability.
 
 ## Architecture
 
@@ -197,14 +197,14 @@ Each execution is bound to an immutable governed artifact or committed stream
 checkpoint so later ingestion cannot change the data observed by an already
 started execution.
 
-### Kafka streaming-ingestion contract
+### Continuous Kafka ingestion contract
 
-Yes—governed ingestion includes continuous Kafka-based ingestion through
-`ingestion.records.v1`. The topic is generic: CDR is only the included
-demonstration. The same contract can describe XDR, HR, IoT, financial, or other
-record-oriented sources.
+Continuous Kafka ingestion uses the generic `ingestion.records.v1` topic.
+Telecom CDR is the included demonstration dataset; the same versioned contract
+supports XDR, HR, IoT, financial, and other record-oriented sources.
 
-The logical decoded message has this shape:
+After signature verification and envelope decoding, the logical payload has
+the following structure:
 
 ```json
 {
@@ -274,7 +274,7 @@ Important contract rules:
 - `streamId` identifies the continuing logical stream or dataset.
 - `entity.id` is the durable entity UUID used for metadata and governed
   artifact resolution.
-- `sourceId` identifies the bounded producer source.
+- `sourceId` identifies the upstream producer.
 - `sequence` is monotonic within a stream and becomes part of the execution
   checkpoint.
 - `records` contains between 1 and 5,000 objects. Record keys must match the
@@ -288,8 +288,9 @@ Important contract rules:
   reused and structural drift is rejected. When it does not exist, Java
   transactionally registers the entity and its columns before processing.
 
-Messages on Kafka are not published as unsigned plain JSON. The logical payload
-is UTF-8 JSON, Base64URL-encoded, and wrapped in an HMAC-SHA256 envelope:
+Kafka records use a signed envelope rather than unsigned JSON. The logical
+payload is UTF-8 JSON, Base64URL-encoded, and protected by an HMAC-SHA-256
+signature:
 
 ```json
 {
@@ -346,7 +347,7 @@ object-created events and duplicate stream chunks are handled idempotently.
 |---|---|---|---|
 | SvelteKit frontend | Authenticated product shell, chat, execution/result views, charts, localization and admin UX | Browser presentation state only | Java REST and SSE |
 | Java control plane | Users, authorization, chat history, entity metadata, execution orchestration, durable lifecycle, audit and retention | PostgreSQL and Redis | Browser, Keycloak, Kafka and authenticated Python APIs |
-| Python executor | LLM interaction, classification, governed planning, Spark reports, Spark ML, ingestion and MinIO artifact operations | MinIO artifacts and local replay ledger where applicable | Java, Kafka, Spark, MinIO and LLM |
+| Python executor | LLM interaction, classification, governed planning, Spark reports, Spark ML, ingestion and MinIO artifact operations | MinIO artifacts and executor-local SQLite replay ledgers | Java, Kafka, Spark, MinIO and LLM |
 | PostgreSQL | Authoritative application metadata, execution/import history, audit state and Keycloak identity database | Durable relational state | Java and Keycloak |
 | Redis | Opaque server-side HTTP session and OIDC token storage | Session state | Java only |
 | Kafka | Versioned execution, result, control and ingestion event backbone | Durable topics | Java and Python |
@@ -389,7 +390,8 @@ MinIO object keys and completion timestamps. They do not contain source
 datasets, result rows, prompts, credentials, provider tokens, user profiles or
 chat content.
 
-This state is security-relevant despite containing no corporate dataset:
+This operational state is security-relevant despite containing no corporate
+dataset:
 tampering could weaken duplicate-event and replay protection. SQLite access
 uses parameter binding, the files are not exposed by an HTTP API, and the
 executor is their sole application owner. The current topology therefore
@@ -408,7 +410,8 @@ MinIO side effects before an offset is committed, so a redelivery still needs
 a durable event/chunk identifier check. An in-memory set would lose that
 protection on restart, while an additional network database would add an
 operational dependency without improving the current single-executor
-topology. This trade-off changes when multiple executor replicas are required.
+topology. Horizontal executor replication requires a shared transactional
+idempotency and checkpoint store.
 
 ### Durability and consistency model
 
@@ -439,13 +442,13 @@ Spark, MinIO and Keycloak.
 
 ## Reporting model
 
-The reporting path accepts versioned Pydantic orders, never SQL text. The
+The reporting path accepts versioned Pydantic orders and rejects SQL text. The
 approved registries cover projections, aggregations, grouping, temporal
 grouping, nested `AND`/`OR` filters, `HAVING`, ordering, bounded limits, KPIs,
 and chart hints. Python maps a validated order to explicit Spark DataFrame
 operations.
 
-An abbreviated order resembles:
+The following abbreviated order illustrates the report contract:
 
 ```json
 {
@@ -459,7 +462,7 @@ An abbreviated order resembles:
     ],
     "groupBy": ["region"],
     "filters": [],
-    "orderBy": [{"field": "total_sales", "direction": "DESC"}],
+    "orderBy": [{"column": "total_sales", "direction": "DESC"}],
     "limit": 100
   }
 }
@@ -469,7 +472,7 @@ Full report results are stored as governed Parquet. The browser receives at
 most 20 preview rows, scalar indicators, charts, warnings, row counts, and
 result metadata. Direct Parquet download is not exposed.
 
-## Machine-learning model
+## Machine learning
 
 ML access is restricted to `SCIENTIST` and `ADMIN`. The explicit algorithm
 registry currently supports:
@@ -538,8 +541,8 @@ navigation visibility is not treated as the security boundary.
 
 ## Example prompts
 
-The examples below intentionally contain only natural-language requests. The
-following product walkthrough shows representative executions and results.
+The examples below contain natural-language requests only. The product
+walkthrough that follows shows representative executions and results.
 
 ### Reports
 
@@ -660,10 +663,9 @@ the underlying dataset to the LLM.
 | Verification | JUnit 5, Testcontainers, pytest, Ruff, Vitest, Testing Library and Playwright |
 | Local orchestration | Docker Compose and Bash |
 
-The repository is architecture-aware but platform-neutral at its boundaries:
-LLM access uses an OpenAI-compatible protocol, analytical storage uses Parquet,
-and service communication is expressed through versioned HTTP and Kafka
-contracts.
+External boundaries use portable contracts: LLM access follows an
+OpenAI-compatible protocol, analytical storage uses Parquet, and service
+communication uses versioned HTTP and Kafka contracts.
 
 ## Security architecture
 
@@ -687,9 +689,9 @@ contracts.
   `ADMIN > SCIENTIST > REPORTER`.
 - Java-to-Python HTTP endpoints require a scoped internal API credential,
   compared using constant-time equality on both services.
-- Kafka envelopes include contract versions, event/correlation identifiers,
-  idempotency identifiers and HMAC-SHA-256 validation where applicable. The
-  signature provides message authenticity and integrity, not transport
+- Application Kafka envelopes include contract versions, event and correlation
+  identifiers, idempotency identifiers, and HMAC-SHA-256 signatures. Signatures
+  provide message authenticity and integrity; they do not provide transport
   confidentiality.
 - Executor-local SQLite ledgers persist replay and duplicate-processing state;
   they contain operational identifiers rather than corporate datasets and are
@@ -833,7 +835,7 @@ public repository content.
 Prerequisites are Docker with Compose v2, Bash, OpenSSL, curl, Java 17, Maven,
 Python 3.12 or 3.13, Node.js/npm, and an available configured LLM provider.
 
-### First evaluation checklist
+### Local evaluation procedure
 
 After cloning the repository:
 
