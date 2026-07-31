@@ -116,7 +116,7 @@ kozmik:
     system-keycloak-user-id: ${INGESTION_SYSTEM_KEYCLOAK_USER_ID:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3}
   execution:
     timeout-seconds: ${EXECUTION_TIMEOUT_SECONDS:1800}
-    max-concurrent-jobs: ${SPARK_MAX_CONCURRENT_JOBS:8}
+    max-concurrent-jobs: ${SPARK_MAX_CONCURRENT_JOBS:4}
     max-preview-rows: ${EXECUTION_MAX_PREVIEW_ROWS:100}
     dataset-uri: ${EXECUTION_DATASET_URI:}
     dataset-format: ${EXECUTION_DATASET_FORMAT:parquet}

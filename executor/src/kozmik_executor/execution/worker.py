@@ -270,7 +270,7 @@ class KafkaExecutionWorker:
         )
         self.ledger = EventLedger(os.getenv(
             "EXECUTION_EVENT_LEDGER_PATH", "/tmp/kozmik/execution-events.sqlite3"))
-        self.semaphore = asyncio.Semaphore(int(os.getenv("SPARK_MAX_CONCURRENT_JOBS", "8")))
+        self.semaphore = asyncio.Semaphore(int(os.getenv("SPARK_MAX_CONCURRENT_JOBS", "4")))
         self.worker = TrustedReportWorker(
             self.publish_status, self.publish_result, SparkReportExecutor(), SparkMlExecutor(),
             dataset_resolver=GovernedDatasetResolver())
@@ -501,7 +501,7 @@ class KafkaExecutionWorker:
         logger.info(
             "execution_worker_started commandTopic=%s controlTopic=%s concurrency=%s",
             self.command_topic, self.control_topic,
-            os.getenv("SPARK_MAX_CONCURRENT_JOBS", "8"),
+            os.getenv("SPARK_MAX_CONCURRENT_JOBS", "4"),
         )
         try:
             await asyncio.gather(self._run_commands(), self._run_controls())
@@ -512,7 +512,7 @@ class KafkaExecutionWorker:
             await self.producer.stop()
 
     async def _run_commands(self) -> None:
-        max_records = int(os.getenv("SPARK_MAX_CONCURRENT_JOBS", "8"))
+        max_records = int(os.getenv("SPARK_MAX_CONCURRENT_JOBS", "4"))
         while True:
             batches = await self.consumer.getmany(timeout_ms=1000, max_records=max_records)
             messages = [message for values in batches.values() for message in values]

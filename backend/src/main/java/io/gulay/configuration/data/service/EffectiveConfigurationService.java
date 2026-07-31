@@ -24,7 +24,7 @@ public class EffectiveConfigurationService {
     private int defaultCharacters;
     @Value("${kozmik.execution.timeout-seconds:1800}")
     private int executionTimeout;
-    @Value("${kozmik.execution.max-concurrent-jobs:8}")
+    @Value("${kozmik.execution.max-concurrent-jobs:4}")
     private int maxConcurrentJobs;
     @Value("${kozmik.execution.max-preview-rows:100}")
     private int maxPreviewRows;
