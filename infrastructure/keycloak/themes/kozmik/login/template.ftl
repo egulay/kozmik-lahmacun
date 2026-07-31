@@ -12,9 +12,9 @@
       <link href="${url.resourcesPath}/${style}" rel="stylesheet">
     </#list>
   </#if>
-  <#if scripts??>
-    <#list scripts as script>
-      <script src="${script}" type="text/javascript"></script>
+  <#if properties.scripts?has_content>
+    <#list properties.scripts?split(' ') as script>
+      <script src="${url.resourcesPath}/${script}" type="text/javascript" defer></script>
     </#list>
   </#if>
 </head>

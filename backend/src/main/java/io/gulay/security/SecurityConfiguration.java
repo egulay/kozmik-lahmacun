@@ -3,6 +3,7 @@ package io.gulay.security;
 import lombok.val;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -29,6 +30,7 @@ import org.springframework.security.web.csrf.HttpSessionCsrfTokenRepository;
 @Configuration
 @EnableWebSecurity
 @RequiredArgsConstructor
+@Slf4j
 public class SecurityConfiguration {
 
     private final KeycloakOidcUserService oidcUserService;
@@ -84,7 +86,21 @@ public class SecurityConfiguration {
                                         .matcher("/internal/**")))
                 .oauth2Login(oauth -> oauth
                         .authorizedClientRepository(authorizedClients)
-                        .defaultSuccessUrl("/", true)
+                        .successHandler((request, response, authentication) -> {
+                            var selectedLocale = "en";
+                            val cookies = request.getCookies();
+                            if (cookies != null) {
+                                for (val cookie : cookies) {
+                                    if ("kozmik-login-locale".equals(cookie.getName())
+                                            && "tr".equalsIgnoreCase(cookie.getValue())) {
+                                        selectedLocale = "tr";
+                                        break;
+                                    }
+                                }
+                            }
+                            log.info("oidc_login_success selectedLocale={}", selectedLocale);
+                            response.sendRedirect("/?locale=" + selectedLocale);
+                        })
                         .userInfoEndpoint(
                                 userInfo -> userInfo.oidcUserService(oidcUserService::loadUser)))
                 .logout(logout -> logout

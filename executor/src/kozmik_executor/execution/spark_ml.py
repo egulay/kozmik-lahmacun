@@ -40,7 +40,11 @@ ML_NAMESPACE = UUID("8a859a44-9b33-49da-afbb-c6af731c9518")
 
 class SparkMlExecutor:
     def __init__(self, spark=None, minio=None) -> None:
-        self.spark = spark or SparkSession.builder.appName("kozmik-ml-worker").getOrCreate()
+        self.spark = spark or (
+            SparkSession.builder.appName("kozmik-ml-worker")
+            .config("spark.scheduler.mode", os.getenv("SPARK_SCHEDULER_MODE", "FAIR"))
+            .getOrCreate()
+        )
         self.minio = minio or Minio(
             os.getenv("MINIO_ENDPOINT", "localhost:9000"),
             access_key=os.getenv("MINIO_ACCESS_KEY", ""),

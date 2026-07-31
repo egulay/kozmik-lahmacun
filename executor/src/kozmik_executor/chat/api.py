@@ -178,7 +178,10 @@ def _classification_prompt(request: ClassificationRequest) -> str:
         "averages, counts, grouping, filtering, comparisons, trends, unusual observed patterns, "
         "or charts. ML requires an explicit request to predict or estimate an unknown outcome, "
         "forecast, train a model, classify, score probability or risk, or perform machine "
-        "learning. Charts and unusual-pattern descriptions alone are REPORT. Do not generate "
+        "learning. Controlled what-if or counterfactual scenarios that change input values and "
+        "compare predicted outcomes with an unchanged baseline are ML, including equivalent "
+        "Turkish requests using kontrollü senaryo and değişmemiş başlangıç. Charts and "
+        "unusual-pattern descriptions alone are REPORT. Do not generate "
         "a plan, SQL, code, or request raw rows.\n"
         f"Capabilities: {','.join(request.capabilities)}\n"
         f"Schema metadata only:\n{metadata}\n"
@@ -196,7 +199,9 @@ def _governed_intent_override(
         r"\b(?:predict(?:ion)?|forecast|train(?:ing)?|machine learning|"
         r"classif(?:y|ication)|probability|risk score|anomaly model|"
         r"estimate(?:d)?\s+(?:expected|future)|"
-        r"tahmin\w*|öngör\w*|model\s+eğit\w*|sınıflandır\w*|olasılık|risk\s+puan\w*)\b",
+        r"what[- ]if|counterfactual|controlled\s+scenarios?|unchanged\s+baseline|"
+        r"tahmin\w*|öngör\w*|model\s+eğit\w*|sınıflandır\w*|olasılık|risk\s+puan\w*|"
+        r"kontrollü\s+senaryo\w*|değişmemiş\s+başlangıç)\b",
         text,
         re.IGNORECASE,
     )

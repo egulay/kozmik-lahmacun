@@ -108,7 +108,11 @@ TEMPORAL_GROUP_REGISTRY: dict[TemporalGranularity, Callable] = {
 
 class SparkReportExecutor:
     def __init__(self, spark: SparkSession | None = None, minio: Minio | None = None) -> None:
-        self.spark = spark or SparkSession.builder.appName("kozmik-report-worker").getOrCreate()
+        self.spark = spark or (
+            SparkSession.builder.appName("kozmik-report-worker")
+            .config("spark.scheduler.mode", os.getenv("SPARK_SCHEDULER_MODE", "FAIR"))
+            .getOrCreate()
+        )
         self.minio = minio or Minio(
             os.getenv("MINIO_ENDPOINT", "localhost:9000"),
             access_key=os.getenv("MINIO_ACCESS_KEY", ""),

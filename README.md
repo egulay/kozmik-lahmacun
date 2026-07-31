@@ -784,8 +784,8 @@ Typical bindings include:
 |---|---|
 | Kafka | `KAFKA_PORT`, `KAFKA_BOOTSTRAP_SERVERS`, topic variables, consumer group and publish retry limits |
 | Redis | `REDIS_HOST`, `REDIS_PORT`, `REDIS_TIMEOUT` |
-| Spark/execution | `SPARK_MAX_CONCURRENT_JOBS`, `EXECUTION_TIMEOUT_SECONDS`, `EXECUTION_MAX_PREVIEW_ROWS` |
-| LLM | `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_MODEL`, timeouts, retries and context bounds |
+| Spark/execution | `SPARK_MAX_CONCURRENT_JOBS`, `SPARK_SCHEDULER_MODE`, `EXECUTION_TIMEOUT_SECONDS`, `EXECUTION_MAX_PREVIEW_ROWS` |
+| LLM | `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_MODEL`, timeouts, retries, context bounds and `LLM_MAX_CONCURRENT_STRUCTURED_REQUESTS` |
 | MinIO | Endpoint, API/console ports, secure transport flag and scoped credential names |
 | Retention | Chat, execution, preview and artifact periods plus scheduler expressions |
 | Logging | `JAVA_LOG_DIR`, `PYTHON_LOG_DIR`, levels, history and size cap |

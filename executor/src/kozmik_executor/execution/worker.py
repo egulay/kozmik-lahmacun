@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import UUID, uuid5
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
+from aiokafka.structs import OffsetAndMetadata, TopicPartition
 from minio import Minio
 from pydantic import ValidationError
 
@@ -513,17 +514,87 @@ class KafkaExecutionWorker:
 
     async def _run_commands(self) -> None:
         max_records = int(os.getenv("SPARK_MAX_CONCURRENT_JOBS", "4"))
+        pending: dict[
+            asyncio.Task[bool], tuple[TopicPartition, int, bytes]
+        ] = {}
+        commit_cursor: dict[TopicPartition, int] = {}
+        completed_offsets: dict[TopicPartition, set[int]] = {}
         while True:
-            batches = await self.consumer.getmany(timeout_ms=1000, max_records=max_records)
-            messages = [message for values in batches.values() for message in values]
-            if not messages:
-                continue
             if not self.lifecycle.accepting:
+                if pending:
+                    await self._complete_command_tasks(
+                        pending, commit_cursor, completed_offsets, wait=True)
+                    continue
                 await asyncio.sleep(0.25)
                 continue
-            outcomes = await asyncio.gather(*(self.handle(message.value) for message in messages))
-            if all(outcomes):
-                await self.consumer.commit()
+
+            capacity = max_records - len(pending)
+            if capacity > 0:
+                batches = await self.consumer.getmany(
+                    timeout_ms=250, max_records=capacity)
+                for topic_partition, messages in batches.items():
+                    if messages:
+                        commit_cursor.setdefault(topic_partition, messages[0].offset)
+                        completed_offsets.setdefault(topic_partition, set())
+                    for message in messages:
+                        task = asyncio.create_task(self.handle(message.value))
+                        pending[task] = (
+                            topic_partition, message.offset, message.value)
+
+            if pending:
+                await self._complete_command_tasks(
+                    pending,
+                    commit_cursor,
+                    completed_offsets,
+                    wait=len(pending) >= max_records,
+                )
+
+    async def _complete_command_tasks(
+        self,
+        pending: dict[asyncio.Task[bool], tuple[TopicPartition, int, bytes]],
+        commit_cursor: dict[TopicPartition, int],
+        completed_offsets: dict[TopicPartition, set[int]],
+        *,
+        wait: bool,
+    ) -> None:
+        done, _ = await asyncio.wait(
+            pending,
+            timeout=None if wait else 0,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in done:
+            topic_partition, offset, value = pending.pop(task)
+            try:
+                completed = task.result()
+            except Exception:
+                logger.exception(
+                    "execution_dispatch_failed partition=%s offset=%s",
+                    topic_partition.partition,
+                    offset,
+                )
+                completed = False
+            if completed:
+                completed_offsets[topic_partition].add(offset)
+            elif self.lifecycle.accepting:
+                retry = asyncio.create_task(self._retry_command(value))
+                pending[retry] = (topic_partition, offset, value)
+
+        commits: dict[TopicPartition, OffsetAndMetadata] = {}
+        for topic_partition, offsets in completed_offsets.items():
+            cursor = commit_cursor[topic_partition]
+            previous = cursor
+            while cursor in offsets:
+                offsets.remove(cursor)
+                cursor += 1
+            if cursor > previous:
+                commit_cursor[topic_partition] = cursor
+                commits[topic_partition] = OffsetAndMetadata(cursor, "")
+        if commits:
+            await self.consumer.commit(commits)
+
+    async def _retry_command(self, value: bytes) -> bool:
+        await asyncio.sleep(0.25)
+        return await self.handle(value)
 
     async def _run_controls(self) -> None:
         async for message in self.control_consumer:

@@ -61,6 +61,29 @@ def test_explicit_prediction_is_not_overridden_by_report_words() -> None:
     assert _governed_intent_override(request, IntentType.REPORT) == IntentType.ML
 
 
+def test_turkish_controlled_what_if_request_is_ml() -> None:
+    payload = body(
+        "Satış verilerinde birim fiyat, miktar ve indirim oranını ayrı ayrı %5 artırıp "
+        "azaltan kontrollü senaryoları test et. Her senaryoyu değişmemiş başlangıç "
+        "değeriyle karşılaştır ve yalnızca hesaplanan kanıta dayanarak yönetime koşullu "
+        "bir öneri sun."
+    )
+    payload["language"] = "tr"
+    request = ClassificationRequest.model_validate(payload)
+
+    assert _governed_intent_override(request, IntentType.REPORT) == IntentType.ML
+
+
+def test_english_controlled_what_if_request_is_ml() -> None:
+    payload = body(
+        "Run controlled scenarios changing price by plus and minus five percent, compare "
+        "predicted outcomes with the unchanged baseline, and recommend the strongest option."
+    )
+    request = ClassificationRequest.model_validate(payload)
+
+    assert _governed_intent_override(request, IntentType.REPORT) == IntentType.ML
+
+
 def test_contract_rejects_raw_row_payload(monkeypatch) -> None:
     payload = body("Create a report")
     payload["rawRows"] = [{"customer": "secret"}]

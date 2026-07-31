@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import re
 from collections.abc import AsyncIterator
@@ -8,6 +9,12 @@ from typing import Protocol
 import httpx
 
 from .models import EffectiveLlmConfiguration, IntentType
+
+logger = logging.getLogger(__name__)
+_STRUCTURED_REQUEST_LIMIT = max(
+    1, int(os.getenv("LLM_MAX_CONCURRENT_STRUCTURED_REQUESTS", "1"))
+)
+_STRUCTURED_REQUEST_SEMAPHORE = asyncio.Semaphore(_STRUCTURED_REQUEST_LIMIT)
 
 
 def _parse_intent(content: str) -> IntentType:
@@ -178,25 +185,37 @@ class OpenAiCompatibleProvider:
         }
         if self.name != "lm-studio":
             payload["response_format"] = {"type": "json_object"}
-        for attempt in range(self.config.max_retries + 1):
-            try:
-                async with httpx.AsyncClient(
-                    timeout=httpx.Timeout(self.config.timeout_seconds),
-                    headers=self._headers(),
-                    transport=self.transport,
-                ) as client:
-                    response = await client.post(
-                        f"{self.config.base_url.rstrip('/')}/chat/completions", json=payload
+        async with _STRUCTURED_REQUEST_SEMAPHORE:
+            for attempt in range(self.config.max_retries + 1):
+                try:
+                    async with httpx.AsyncClient(
+                        timeout=httpx.Timeout(self.config.timeout_seconds),
+                        headers=self._headers(),
+                        transport=self.transport,
+                    ) as client:
+                        response = await client.post(
+                            f"{self.config.base_url.rstrip('/')}/chat/completions", json=payload
+                        )
+                        response.raise_for_status()
+                        content = response.json()["choices"][0]["message"]["content"]
+                        return _parse_json_object(content)
+                except (httpx.TimeoutException, httpx.NetworkError) as exception:
+                    if attempt >= self.config.max_retries:
+                        raise ProviderError("LLM_PROVIDER_TIMEOUT", retryable=True) from exception
+                    await asyncio.sleep(0.05 * (2**attempt))
+                except httpx.HTTPStatusError as exception:
+                    status = exception.response.status_code
+                    logger.warning(
+                        "llm_structured_request_rejected provider=%s status=%s",
+                        self.name,
+                        status,
                     )
-                    response.raise_for_status()
-                    content = response.json()["choices"][0]["message"]["content"]
-                    return _parse_json_object(content)
-            except (httpx.TimeoutException, httpx.NetworkError) as exception:
-                if attempt >= self.config.max_retries:
-                    raise ProviderError("LLM_PROVIDER_TIMEOUT", retryable=True) from exception
-                await asyncio.sleep(0.05 * (2**attempt))
-            except (httpx.HTTPStatusError, ValueError, KeyError, json.JSONDecodeError) as exception:
-                raise ProviderError("LLM_STRUCTURED_RESPONSE_INVALID") from exception
+                    raise ProviderError(
+                        "LLM_PROVIDER_REQUEST_REJECTED",
+                        retryable=status == 429 or status >= 500,
+                    ) from exception
+                except (ValueError, KeyError, json.JSONDecodeError) as exception:
+                    raise ProviderError("LLM_STRUCTURED_RESPONSE_INVALID") from exception
         raise ProviderError("LLM_PROVIDER_UNAVAILABLE")
 
     async def health(self) -> bool:

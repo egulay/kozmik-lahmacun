@@ -422,6 +422,9 @@ const messages = {
 
 export type TranslationKey = keyof typeof messages.tr;
 const hasLocalStorage = browser && typeof globalThis.localStorage !== 'undefined';
+const redirectLocale = browser
+  ? new URLSearchParams(globalThis.location.search).get('locale')
+  : undefined;
 const loginLocale = browser
   ? document.cookie
       .split('; ')
@@ -431,15 +434,25 @@ const loginLocale = browser
 const storedLocale = hasLocalStorage
   ? globalThis.localStorage.getItem('kozmik-locale')
   : undefined;
-const initial: Locale = loginLocale === 'tr' || loginLocale === 'en'
-  ? loginLocale
+const initial: Locale = redirectLocale === 'tr' || redirectLocale === 'en'
+  ? redirectLocale
+  : loginLocale === 'tr' || loginLocale === 'en'
+    ? loginLocale
   : storedLocale === 'en'
     ? 'en'
     : 'tr';
-if (hasLocalStorage && (loginLocale === 'tr' || loginLocale === 'en')) {
+if (hasLocalStorage && (redirectLocale === 'tr' || redirectLocale === 'en')) {
+  globalThis.localStorage.setItem('kozmik-locale', redirectLocale);
+  const cleanUrl = new URL(globalThis.location.href);
+  cleanUrl.searchParams.delete('locale');
+  globalThis.history.replaceState(globalThis.history.state, '', cleanUrl);
+} else if (hasLocalStorage && (loginLocale === 'tr' || loginLocale === 'en')) {
   globalThis.localStorage.setItem('kozmik-locale', loginLocale);
+}
+if (browser && (loginLocale === 'tr' || loginLocale === 'en')) {
   document.cookie = 'kozmik-login-locale=; Max-Age=0; Path=/; SameSite=Lax';
 }
+if (browser) document.documentElement.lang = initial;
 export const locale = writable<Locale>(initial);
 export const t = derived(locale, ($locale) => (key: TranslationKey, vars?: Record<string, unknown>) => {
   let value: string = messages[$locale][key];
