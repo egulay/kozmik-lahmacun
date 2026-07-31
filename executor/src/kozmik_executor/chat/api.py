@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import secrets
+import unicodedata
 from collections.abc import AsyncIterator
 from uuid import UUID
 
@@ -219,11 +220,58 @@ def _governed_intent_override(
     return IntentType.REPORT if len(report_signals) >= 2 else provider_intent
 
 
+def _clear_governed_intent(request: ClassificationRequest) -> IntentType | None:
+    resolved = _governed_intent_override(request, IntentType.CONVERSATIONAL)
+    return resolved if resolved != IntentType.CONVERSATIONAL else None
+
+
+def _normalized_terms(value: str) -> set[str]:
+    normalized = unicodedata.normalize("NFKD", value.casefold())
+    normalized = "".join(character for character in normalized
+                         if not unicodedata.combining(character))
+    ignored = {
+        "and", "bir", "data", "entity", "record", "records", "veri", "verilerinde",
+        "kaydı", "kaydi", "detayı", "detayi", "the", "using", "kullanarak", "ile",
+        "icin", "için", "ve",
+    }
+    return {
+        term for term in re.findall(r"[^\W\d_]+", normalized, flags=re.UNICODE)
+        if len(term) >= 3 and term not in ignored
+    }
+
+
+def _deterministic_entity_resolution(request: ClassificationRequest) -> UUID | None:
+    request_terms = _normalized_terms(request.user_request)
+    if not request_terms:
+        return None
+    ranked: list[tuple[int, int, UUID]] = []
+    for entity in request.entities:
+        # An explicit entity-name reference is stronger than incidental prose shared by
+        # generated descriptions (for example Turkish articles such as "bir"). Keeping
+        # the scores separate also avoids delaying an otherwise obvious request behind
+        # the serialized local-LLM structured-planning queue.
+        name_score = len(request_terms.intersection(_normalized_terms(entity.name)))
+        description_score = len(request_terms.intersection(
+            _normalized_terms(entity.description or "")
+        ))
+        if name_score or description_score:
+            ranked.append((name_score, description_score, entity.entity_id))
+    ranked.sort(reverse=True, key=lambda item: (item[0], item[1]))
+    if not ranked or (
+        len(ranked) > 1 and ranked[0][:2] == ranked[1][:2]
+    ):
+        return None
+    return ranked[0][2]
+
+
 async def _resolve_entity(
     provider, request: ClassificationRequest, intent: IntentType,
 ) -> UUID | None:
     if intent == IntentType.CONVERSATIONAL or not request.entities:
         return None
+    deterministic = _deterministic_entity_resolution(request)
+    if deterministic is not None:
+        return deterministic
     authorized = {
         str(entity.entity_id): {
             "entityId": str(entity.entity_id),
@@ -266,8 +314,10 @@ async def classify(
     try:
         effective = await configuration_client.load()
         provider = provider_registry.resolve(effective.llm)
-        intent = await provider.classify(_classification_prompt(request))
-        intent = _governed_intent_override(request, intent)
+        intent = _clear_governed_intent(request)
+        if intent is None:
+            intent = await provider.classify(_classification_prompt(request))
+            intent = _governed_intent_override(request, intent)
         selected_entity_id = await _resolve_entity(provider, request, intent)
         return ClassificationResponse(
             request_id=request.request_id,

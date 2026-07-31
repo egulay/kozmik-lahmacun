@@ -569,7 +569,7 @@
     </div>
   {/snippet}
 </PageHeader>
-<StateView {loading} {error} onretry={() => load($page.params.id!)} />
+<StateView loading={loading && !execution && !result} {error} onretry={() => load($page.params.id!)} />
 {#if execution?.status === 'FAILED'}
   <Card.Root class="mb-6">
     <Card.Header class="flex-row items-start justify-between gap-4">

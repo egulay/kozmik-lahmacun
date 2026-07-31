@@ -225,7 +225,7 @@
     </div>
   {/snippet}
 </PageHeader>
-<StateView {loading} {error} onretry={load} />
+<StateView loading={loading && !execution} {error} onretry={load} />
 {#if execution}
   {#if failureExplanation}
     <Alert.Root variant="destructive" class="mb-4">

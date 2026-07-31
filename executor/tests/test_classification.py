@@ -2,7 +2,11 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from kozmik_executor.chat.api import _governed_intent_override
+from kozmik_executor.chat.api import (
+    _clear_governed_intent,
+    _deterministic_entity_resolution,
+    _governed_intent_override,
+)
 from kozmik_executor.chat.models import ClassificationRequest, IntentType
 from kozmik_executor.main import app
 
@@ -82,6 +86,87 @@ def test_english_controlled_what_if_request_is_ml() -> None:
     request = ClassificationRequest.model_validate(payload)
 
     assert _governed_intent_override(request, IntentType.REPORT) == IntentType.ML
+
+
+def test_clear_turkish_what_if_intent_does_not_require_provider_classification() -> None:
+    payload = body(
+        "Satış verilerinde kontrollü senaryoları değişmemiş başlangıç değeriyle karşılaştır."
+    )
+    payload["language"] = "tr"
+
+    assert _clear_governed_intent(
+        ClassificationRequest.model_validate(payload)
+    ) == IntentType.ML
+
+
+def test_explicit_entity_name_is_resolved_without_provider_call() -> None:
+    payload = body("Satış verilerinde aylık toplamları karşılaştır ve grafik göster")
+    sales_id = str(uuid4())
+    payload["language"] = "tr"
+    payload["entities"] = [
+        {
+            "entityId": sales_id,
+            "name": "Satış Kaydı",
+            "description": "Satış işlemleri",
+            "columnNames": ["net_amount"],
+        },
+        {
+            "entityId": str(uuid4()),
+            "name": "Çağrı Detayı Kaydı",
+            "description": "Telekom çağrı kullanımı",
+            "columnNames": ["duration_seconds"],
+        },
+    ]
+
+    assert str(_deterministic_entity_resolution(
+        ClassificationRequest.model_validate(payload)
+    )) == sales_id
+
+
+def test_explicit_entity_name_wins_over_incidental_description_word() -> None:
+    payload = body(
+        "Satış verilerinde birim fiyat, miktar ve indirim oranını ayrı ayrı %5 artırıp "
+        "azaltan kontrollü senaryoları test et. Her senaryoyu değişmemiş başlangıç "
+        "değeriyle karşılaştır."
+    )
+    sales_id = str(uuid4())
+    payload["language"] = "tr"
+    payload["entities"] = [
+        {
+            "entityId": sales_id,
+            "name": "Satış Kaydı",
+            "description": "Ürün detayları ve fiyatlandırma içeren bir satış kaydı",
+            "columnNames": ["net_amount"],
+        },
+        {
+            "entityId": str(uuid4()),
+            "name": "Çağrı Detayı Kaydı",
+            "description": "Bir telefon görüşmesi hakkında detaylı bilgiler",
+            "columnNames": ["duration_seconds"],
+        },
+    ]
+
+    assert str(_deterministic_entity_resolution(
+        ClassificationRequest.model_validate(payload)
+    )) == sales_id
+
+
+def test_ambiguous_entity_terms_still_defer_to_provider() -> None:
+    payload = body("Bölgesel sonuçları karşılaştır")
+    payload["entities"] = [
+        {
+            "entityId": str(uuid4()), "name": "Regional Sales",
+            "description": "Regional performance", "columnNames": ["region"],
+        },
+        {
+            "entityId": str(uuid4()), "name": "Regional Calls",
+            "description": "Regional performance", "columnNames": ["region"],
+        },
+    ]
+
+    assert _deterministic_entity_resolution(
+        ClassificationRequest.model_validate(payload)
+    ) is None
 
 
 def test_contract_rejects_raw_row_payload(monkeypatch) -> None:
