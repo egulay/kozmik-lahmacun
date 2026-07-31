@@ -217,6 +217,10 @@ class ResultExplainer:
                     "Never convert R2, "
                     "accuracy, RMSE, or MAE into a probability or confidence percentage. State a "
                     "probability only when an approved probability fact is explicitly supplied. "
+                    "A currency or measurement unit is itself a governed fact. Never name or "
+                    "infer euros, dollars, lira, or any other currency or unit unless that exact "
+                    "unit is explicitly supplied in a fact unit field. When no unit is supplied, "
+                    "describe the figure only as an amount, value, or result. "
                     "Do not claim a forecast, causal effect, or guaranteed outcome unless "
                     "approved scenario facts directly establish it. "
                     "Write one short paragraph of at most 80 words. "
@@ -235,6 +239,7 @@ class ResultExplainer:
                 raise ProviderError("LLM_SUMMARY_EMPTY")
             violations = self._management_violations(text)
             violations.extend(self._grounding_violations(text, facts))
+            violations.extend(self._unit_grounding_violations(text, facts))
             violations.extend(self._ml_specificity_violations(text, facts))
             violations.extend(self._zero_result_violations(text, facts))
             violations.extend(self._warning_duplication_violations(text, facts))
@@ -254,6 +259,7 @@ class ResultExplainer:
             remaining_violations = (
                 self._management_violations(text)
                 + self._grounding_violations(text, facts)
+                + self._unit_grounding_violations(text, facts)
                 + self._ml_specificity_violations(text, facts)
                 + self._zero_result_violations(text, facts)
                 + self._warning_duplication_violations(text, facts)
@@ -282,6 +288,7 @@ class ResultExplainer:
             final_violations = (
                 self._management_violations(text)
                 + self._grounding_violations(text, facts)
+                + self._unit_grounding_violations(text, facts)
                 + self._ml_specificity_violations(text, facts)
                 + self._zero_result_violations(text, facts)
                 + self._warning_duplication_violations(text, facts)
@@ -517,6 +524,30 @@ class ResultExplainer:
             re.IGNORECASE,
         )
         return ["use the supplied governed report facts"] if empty_claim.search(text) else []
+
+    @staticmethod
+    def _unit_grounding_violations(text: str, facts: SummaryFacts) -> list[str]:
+        """Reject currencies unless an approved KPI explicitly supplies that unit."""
+        supplied_units = " ".join(
+            fact.unit for fact in facts.facts if isinstance(fact.unit, str)
+        )
+        currencies = (
+            r"\b(?:eur|euro\w*|avro\w*)\b|€",
+            r"\b(?:usd|dollar\w*|dolar\w*)\b|\$",
+            r"\b(?:try|tl|turkish lira|türk lirası\w*|lira\w*)\b|₺",
+            r"\b(?:gbp|pounds? sterling|sterlin\w*)\b|£",
+            r"\b(?:jpy|yen)\b|¥",
+            r"\b(?:cny|yuan|renminbi)\b",
+        )
+        unsupported = any(
+            re.search(pattern, text, re.IGNORECASE)
+            and not re.search(pattern, supplied_units, re.IGNORECASE)
+            for pattern in currencies
+        )
+        return (
+            ["do not invent a currency or unit absent from approved fact units"]
+            if unsupported else []
+        )
 
     @staticmethod
     def _warning_duplication_violations(

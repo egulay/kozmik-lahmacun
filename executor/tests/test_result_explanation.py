@@ -220,6 +220,52 @@ def test_management_summary_removes_provider_template_labels_and_markdown():
     )
 
 
+def test_report_summary_rejects_invented_euro_currency() -> None:
+    facts = SummaryFacts.model_validate({
+        "executionType": "REPORT",
+        "language": "tr",
+        "rowCount": 12,
+        "objective": "Aylık toplam net satışları göster",
+        "features": [],
+        "drivers": [],
+        "scenarios": [],
+        "reportBreakdown": [
+            {"dimensions": {"month": "2026-08"},
+             "measures": {"total_net_sales": 2663788.27}},
+        ],
+        "reportHighlights": [],
+        "facts": [],
+        "warnings": [],
+    })
+    summary = (
+        "Ağustos ayında toplam net satış 2,66 milyon euro ile en yüksek seviyeye ulaştı."
+    )
+
+    assert ResultExplainer._unit_grounding_violations(summary, facts) == [
+        "do not invent a currency or unit absent from approved fact units"
+    ]
+
+
+def test_report_summary_accepts_explicitly_approved_currency_unit() -> None:
+    facts = SummaryFacts.model_validate({
+        "executionType": "REPORT",
+        "language": "tr",
+        "rowCount": 1,
+        "objective": "Toplam satış",
+        "features": [],
+        "drivers": [],
+        "scenarios": [],
+        "reportBreakdown": [],
+        "reportHighlights": [],
+        "facts": [{"code": "TOTAL", "value": 100, "unit": "TRY"}],
+        "warnings": [],
+    })
+
+    assert ResultExplainer._unit_grounding_violations(
+        "Toplam satış 100 Türk lirasıdır.", facts
+    ) == []
+
+
 def test_what_if_warning_is_not_repeated_in_management_summary():
     facts = SummaryFacts.model_validate({
         "executionType": "ML", "language": "en", "rowCount": 100,
