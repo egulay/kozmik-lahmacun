@@ -66,7 +66,9 @@ public class IngestionEventHub {
 
     private void publishGlobal(IngestionUiEvent event) {
         val notification = new GlobalIngestionNotification(
-                "1.0", event.eventId(), "entity-ingestion-changed");
+                "1.0", event.eventId(), event.entityId(),
+                "entity-ingestion-changed", event.ingestionKind(),
+                event.stage(), event.status(), event.occurredAt());
         for (val emitter : globalSubscribers) {
             try {
                 emitter.send(SseEmitter.event().id(event.eventId().toString())
@@ -93,6 +95,7 @@ public class IngestionEventHub {
     }
 
     public record GlobalIngestionNotification(
-            String schemaVersion, UUID eventId, String eventType) {
+            String schemaVersion, UUID eventId, UUID entityId, String eventType,
+            String ingestionKind, String stage, String status, Instant occurredAt) {
     }
 }

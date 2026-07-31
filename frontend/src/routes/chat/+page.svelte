@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
+  import { goto } from '$app/navigation';
   import { page } from '$app/stores';
-  import { Bot, MessageCirclePlus, Send, ShieldCheck, Trash2 } from '@lucide/svelte';
+  import { Bot, MessageCirclePlus, Pencil, Send, ShieldCheck, Trash2 } from '@lucide/svelte';
   import { api } from '$lib/api';
   import { locale, t } from '$lib/i18n';
   import type { ChatMessage, ChatThread } from '$lib/types';
@@ -18,6 +19,12 @@
   import { Textarea } from '$lib/components/ui/textarea/index.js';
   import { Input } from '$lib/components/ui/input/index.js';
   import * as Dialog from '$lib/components/ui/dialog/index.js';
+  import * as Tooltip from '$lib/components/ui/tooltip/index.js';
+  import {
+    closeWorkspaceTab,
+    openWorkspaceTab,
+    workspaceTabs
+  } from '$lib/workspace-tabs';
 
   let threads = $state<ChatThread[]>([]);
   let threadPage = $state(0);
@@ -25,7 +32,13 @@
   let threadLoadingMore = $state(false);
   let threadViewport = $state<HTMLElement | null>(null);
   let messages = $state<ChatMessage[]>([]);
+  let messagePage = $state(0);
+  let messageLast = $state(false);
+  let messageLoadingMore = $state(false);
+  let messageViewport = $state<HTMLElement | null>(null);
   let selected = $state<string | null>(null);
+  let selectedTitle = $state('');
+  let threadSelectionSequence = 0;
   let message = $state('');
   let loading = $state(true);
   let sending = $state(false);
@@ -36,9 +49,45 @@
   let createDialogOpen = $state(false);
   let deleteCandidate = $state<ChatThread | null>(null);
   let deletingThread = $state(false);
+  let renameCandidate = $state<ChatThread | null>(null);
+  let renameTitle = $state('');
+  let renamingThread = $state(false);
+  let suppressedThreadActionsId = $state<string | null>(null);
+  let lastDeletedThreadId = $state<string | null>(null);
   let threadTitle = $state('');
   let messageEnd: HTMLDivElement;
+  let composer = $state<HTMLTextAreaElement | null>(null);
   const draftPrefix = 'kozmik-chat-draft:';
+
+  $effect(() => {
+    const viewport = messageViewport;
+    if (!viewport) return;
+    const onscroll = () => {
+      if (
+        viewport.scrollTop <= 48
+        && !messageLast
+        && !messageLoadingMore
+        && selected
+      ) {
+        void loadOlderMessages(selected);
+      }
+    };
+    viewport.addEventListener('scroll', onscroll, { passive: true });
+    return () => viewport.removeEventListener('scroll', onscroll);
+  });
+
+  $effect(() => {
+    const requested = $page.url.searchParams.get('thread');
+    if (
+      requested
+      && requested !== lastDeletedThreadId
+      && requested !== selected
+      && !loading
+      && !deletingThread
+    ) {
+      void selectThread(requested, false);
+    }
+  });
 
   $effect(() => {
     const viewport = threadViewport;
@@ -76,7 +125,11 @@
     };
   });
 
-  async function loadThreads(reset = true) {
+  async function loadThreads(
+    reset = true,
+    excludedThreadId: string | undefined = undefined,
+    reportFailure = true
+  ) {
     if (!reset && (threadLast || threadLoadingMore)) return;
     if (reset) loading = true;
     else threadLoadingMore = true;
@@ -90,17 +143,18 @@
         )];
       threadPage = response.page;
       threadLast = response.last;
-      const requested = $page.url.searchParams.get('thread');
+      const routeThreadId = $page.url.searchParams.get('thread');
+      const requested = routeThreadId === excludedThreadId ? null : routeThreadId;
       if (reset && !selected && (requested || threads.length)) {
-        await selectThread(requested ?? threads[0].id);
+        await selectThread(requested ?? threads[0].id, true, reportFailure);
       }
     } catch {
-      error = $t('apiUnavailable');
+      if (reportFailure) error = $t('apiUnavailable');
     } finally {
       if (reset) loading = false;
       threadLoadingMore = false;
     }
-    await fillThreadList();
+    if (reportFailure) await fillThreadList();
   }
 
   async function fillThreadList() {
@@ -116,23 +170,56 @@
     }
   }
 
-  async function selectThread(id: string) {
+  async function selectThread(
+    id: string,
+    updateLocation = true,
+    reportFailure = true
+  ) {
+    const selectionSequence = ++threadSelectionSequence;
     persistDraft();
     selected = id;
+    const threadTitle = threads.find((thread) => thread.id === id)?.title
+      ?? $workspaceTabs.find(
+        (tab) => tab.tabType === 'chat' && tab.threadId === id
+      )?.title
+      ?? `Chat · ${id.slice(0, 8)}`;
+    selectedTitle = threadTitle;
+    openWorkspaceTab({
+      threadId: id,
+      title: threadTitle,
+      tabType: 'chat'
+    });
     message = typeof sessionStorage === 'undefined'
       ? ''
       : sessionStorage.getItem(`${draftPrefix}${id}`) ?? '';
     stream?.close();
     liveMessage = null;
+    messagePage = 0;
+    messageLast = false;
+    messageLoadingMore = false;
+    messages = [];
     try {
-      messages = await api.messages(id);
+      if (updateLocation && $page.url.searchParams.get('thread') !== id) {
+        await goto(`/chat?thread=${encodeURIComponent(id)}`);
+      }
+      const response = await api.messagePage(id, 0, 20);
+      if (selectionSequence !== threadSelectionSequence || selected !== id) return;
+      messages = response.items;
+      messagePage = response.page;
+      messageLast = response.last;
       await scrollToLatest();
       const pending = [...messages].reverse().find((item) =>
         ['PENDING', 'STREAMING'].includes(item.status)
       );
       if (pending) connectStream(id, pending.id);
     } catch {
-      error = $t('apiUnavailable');
+      if (
+        reportFailure
+        && selectionSequence === threadSelectionSequence
+        && selected === id
+      ) {
+        error = $t('apiUnavailable');
+      }
     }
   }
 
@@ -145,17 +232,82 @@
     }
   }
 
+  async function loadOlderMessages(threadId: string) {
+    if (messageLoadingMore || messageLast || selected !== threadId) return;
+    messageLoadingMore = true;
+    const previousHeight = messageViewport?.scrollHeight ?? 0;
+    const previousTop = messageViewport?.scrollTop ?? 0;
+    try {
+      const response = await api.messagePage(threadId, messagePage + 1, 20);
+      if (selected !== threadId) return;
+      messages = [
+        ...response.items,
+        ...messages.filter(
+          (message) => !response.items.some((older) => older.id === message.id)
+        )
+      ];
+      messagePage = response.page;
+      messageLast = response.last;
+      await tick();
+      if (messageViewport) {
+        messageViewport.scrollTop =
+          previousTop + messageViewport.scrollHeight - previousHeight;
+      }
+    } catch {
+      error = $t('apiUnavailable');
+    } finally {
+      messageLoadingMore = false;
+    }
+  }
+
   async function createThread() {
     const title = threadTitle.trim();
-    if (!title) return;
+    if (!title || title.length > 50) return;
     try {
       const created = await api.createThread(title, $locale);
       threads = [created, ...threads];
       threadTitle = '';
       createDialogOpen = false;
       await selectThread(created.id);
+      await focusComposer();
     } catch {
       error = $t('apiUnavailable');
+    }
+  }
+
+  function openRenameDialog(thread: ChatThread) {
+    renameCandidate = thread;
+    renameTitle = thread.title;
+  }
+
+  function suppressThreadActions(threadId: string | undefined) {
+    if (threadId) suppressedThreadActionsId = threadId;
+  }
+
+  async function renameThread() {
+    const title = renameTitle.trim();
+    if (!renameCandidate || renamingThread || !title || title.length > 50) return;
+    renamingThread = true;
+    error = '';
+    try {
+      const renamed = await api.renameThread(renameCandidate.id, title);
+      threads = threads.map((thread) => thread.id === renamed.id ? renamed : thread);
+      if (selected === renamed.id) selectedTitle = renamed.title;
+      openWorkspaceTab({
+        threadId: renamed.id,
+        title: renamed.title,
+        tabType: 'chat'
+      });
+      window.dispatchEvent(new CustomEvent('kozmik:chat-thread-renamed', {
+        detail: { thread: renamed }
+      }));
+      suppressThreadActions(renamed.id);
+      renameCandidate = null;
+      renameTitle = '';
+    } catch {
+      error = $t('apiUnavailable');
+    } finally {
+      renamingThread = false;
     }
   }
 
@@ -163,29 +315,68 @@
     if (!deleteCandidate || deletingThread) return;
     deletingThread = true;
     error = '';
+    const deletedId = deleteCandidate.id;
     try {
-      const deletedId = deleteCandidate.id;
       await api.deleteThread(deletedId);
-      if (typeof sessionStorage !== 'undefined') {
-        sessionStorage.removeItem(`${draftPrefix}${deletedId}`);
-      }
-      if (selected === deletedId) {
-        stream?.close();
-        liveMessage = null;
-        selected = null;
-        messages = [];
-        message = '';
-      }
-      window.dispatchEvent(new CustomEvent('kozmik:chat-thread-deleted', {
-        detail: { threadId: deletedId }
-      }));
-      deleteCandidate = null;
-      await loadThreads();
     } catch {
       error = $t('apiUnavailable');
+      deletingThread = false;
+      return;
+    }
+
+    lastDeletedThreadId = deletedId;
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.removeItem(`${draftPrefix}${deletedId}`);
+    }
+    threads = threads.filter((thread) => thread.id !== deletedId);
+    if (selected === deletedId) {
+      threadSelectionSequence += 1;
+      stream?.close();
+      liveMessage = null;
+      selected = null;
+      selectedTitle = '';
+      messages = [];
+      message = '';
+      try {
+        await goto('/chat', {
+          replaceState: true,
+          noScroll: true,
+          keepFocus: true
+        });
+      } catch {
+        // Deletion already succeeded; interrupted client navigation is not a backend failure.
+      }
+    }
+    closeWorkspaceTab('chat', deletedId);
+    window.dispatchEvent(new CustomEvent('kozmik:chat-thread-deleted', {
+      detail: { threadId: deletedId }
+    }));
+    deleteCandidate = null;
+    try {
+      await loadThreads(true, deletedId, false);
+      if (threads.length === 0) {
+        threadSelectionSequence += 1;
+        selected = null;
+        selectedTitle = '';
+        messages = [];
+        liveMessage = null;
+      } else {
+        const latestThreadId = threads[0].id;
+        if (selected !== latestThreadId) {
+          await selectThread(latestThreadId, true, false);
+        }
+        await focusComposer();
+      }
     } finally {
       deletingThread = false;
     }
+  }
+
+  async function focusComposer() {
+    await tick();
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => composer?.focus());
+    });
   }
 
   async function sendMessage() {
@@ -251,7 +442,23 @@
 
   async function reloadMessages(threadId: string) {
     try {
-      messages = await api.messages(threadId);
+      const responses = await Promise.all(
+        Array.from(
+          { length: messagePage + 1 },
+          (_, pageNumber) => api.messagePage(threadId, pageNumber, 20)
+        )
+      );
+      if (selected !== threadId) return;
+      const seen = new Set<string>();
+      messages = responses
+        .toReversed()
+        .flatMap((response) => response.items)
+        .filter((message) => {
+          if (seen.has(message.id)) return false;
+          seen.add(message.id);
+          return true;
+        });
+      messageLast = responses.at(-1)?.last ?? true;
       liveMessage = null;
       await scrollToLatest();
     } catch {
@@ -286,18 +493,45 @@
         <ScrollArea class="min-h-0 flex-1" bind:viewportRef={threadViewport}>
           <div class="grid gap-1 pr-3" role="list">
             {#each threads as thread}
-              <div class="group relative">
+              <div class="group relative" role="listitem"
+                onmouseenter={() => {
+                  if (suppressedThreadActionsId === thread.id) suppressedThreadActionsId = null;
+                }}
+                onmouseleave={() => {
+                  if (suppressedThreadActionsId === thread.id) suppressedThreadActionsId = null;
+                }}>
                 <Button variant={selected === thread.id ? 'secondary' : 'ghost'}
-                  class="h-auto w-full justify-start px-3 py-2 pr-10 text-left"
+                  class="h-auto w-full justify-start px-3 py-2 pr-[4.75rem] text-left"
                   onclick={() => selectThread(thread.id)}
                   aria-current={selected === thread.id ? 'page' : undefined}>
                   <span class="grid min-w-0 gap-1">
-                    <strong class="truncate">{thread.title}</strong>
+                    <Tooltip.Provider>
+                      <Tooltip.Root>
+                        <Tooltip.Trigger>
+                          {#snippet child({ props })}
+                            <strong {...props} class="block truncate">{thread.title}</strong>
+                          {/snippet}
+                        </Tooltip.Trigger>
+                        <Tooltip.Content
+                          side="right"
+                          sideOffset={72}
+                          class="pointer-events-none max-w-sm whitespace-normal"
+                        >
+                          {thread.title}
+                        </Tooltip.Content>
+                      </Tooltip.Root>
+                    </Tooltip.Provider>
                     <span class="text-xs font-normal text-muted-foreground">{new Date(thread.updatedAt).toLocaleDateString($locale)}</span>
                   </span>
                 </Button>
                 <Button type="button" size="icon-sm" variant="ghost"
-                  class="absolute inset-y-0 right-1 my-auto opacity-0 transition-opacity active:!translate-y-0 group-hover:opacity-100 focus-visible:opacity-100"
+                  class={`absolute inset-y-0 right-9 my-auto opacity-0 transition-opacity active:!translate-y-0 group-hover:opacity-100 focus-visible:opacity-100 ${suppressedThreadActionsId === thread.id ? 'invisible' : ''}`}
+                  aria-label={`${$t('renameThread')}: ${thread.title}`}
+                  onclick={(event) => { event.stopPropagation(); openRenameDialog(thread); }}>
+                  <Pencil size={15} />
+                </Button>
+                <Button type="button" size="icon-sm" variant="ghost"
+                  class={`absolute inset-y-0 right-1 my-auto opacity-0 transition-opacity active:!translate-y-0 group-hover:opacity-100 focus-visible:opacity-100 ${suppressedThreadActionsId === thread.id ? 'invisible' : ''}`}
                   aria-label={`${$t('deleteThread')}: ${thread.title}`}
                   onclick={(event) => { event.stopPropagation(); deleteCandidate = thread; }}>
                   <Trash2 size={15} />
@@ -317,7 +551,7 @@
 
   <Card.Root class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden" aria-label={$t('chat')}>
     <Card.Header class="border-b">
-      <Card.Title class="text-xl">{threads.find((item) => item.id === selected)?.title ?? $t('selectThread')}</Card.Title>
+      <Card.Title class="text-xl">{selectedTitle || $t('selectThread')}</Card.Title>
     </Card.Header>
     <Card.Content class="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-6 overflow-hidden pt-2">
       <Alert.Root>
@@ -325,7 +559,7 @@
         <Alert.Title>{$t('privacyTitle')}</Alert.Title>
         <Alert.Description>{$t('privacyBody')}</Alert.Description>
       </Alert.Root>
-      <ScrollArea class="h-full min-h-0">
+      <ScrollArea class="h-full min-h-0" bind:viewportRef={messageViewport}>
         <div class="flex min-h-full min-w-0 flex-col gap-4 px-1 pb-2 pr-5" aria-live="polite" aria-relevant="additions text">
           {#if !selected}
             <div class="m-auto grid justify-items-center gap-3 text-muted-foreground">
@@ -334,6 +568,11 @@
           <Button onclick={() => (createDialogOpen = true)}>{$t('createThread')}</Button>
             </div>
           {:else}
+            {#if messageLoadingMore}
+              <div class="py-1 text-center text-xs text-muted-foreground">
+                {$t('loading')}
+              </div>
+            {/if}
             {#each messages as item (item.id)}
               <div class={`flex min-w-0 gap-3 ${item.role === 'USER' ? 'flex-row-reverse' : ''}`}>
                 <Avatar.Root class="size-8">
@@ -376,6 +615,7 @@
       <label class="sr-only" for="chat-message">{$t('messagePlaceholder')}</label>
       <Textarea
         id="chat-message"
+        bind:ref={composer}
         class="h-12 min-h-12 max-h-40 resize-none py-3"
         bind:value={message}
         rows={2}
@@ -398,9 +638,47 @@
       <Dialog.Description>{$t('threadTitle')}</Dialog.Description>
     </Dialog.Header>
     <form class="grid gap-4" onsubmit={(event) => { event.preventDefault(); void createThread(); }}>
-      <Input bind:value={threadTitle} placeholder={$t('threadTitle')} autocomplete="off" />
+      <Input bind:value={threadTitle} placeholder={$t('threadTitle')} autocomplete="off"
+        maxlength={50} aria-invalid={threadTitle.trim().length > 50} />
+      <p class="text-right text-xs text-muted-foreground">{threadTitle.length}/50</p>
       <Dialog.Footer>
-        <Button type="submit" disabled={!threadTitle.trim()}>{$t('createThread')}</Button>
+        <Button type="submit" disabled={!threadTitle.trim() || threadTitle.trim().length > 50}>
+          {$t('createThread')}
+        </Button>
+      </Dialog.Footer>
+    </form>
+  </Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root open={renameCandidate !== null} onOpenChange={(open) => {
+  if (!open && !renamingThread) {
+    suppressThreadActions(renameCandidate?.id);
+    renameCandidate = null;
+    renameTitle = '';
+  }
+}}>
+  <Dialog.Content>
+    <Dialog.Header>
+      <Dialog.Title>{$t('renameThread')}</Dialog.Title>
+      <Dialog.Description>{$t('threadTitle')}</Dialog.Description>
+    </Dialog.Header>
+    <form class="grid gap-4" onsubmit={(event) => { event.preventDefault(); void renameThread(); }}>
+      <Input bind:value={renameTitle} placeholder={$t('threadTitle')} autocomplete="off"
+        maxlength={50} aria-invalid={renameTitle.trim().length > 50} />
+      <p class="text-right text-xs text-muted-foreground">{renameTitle.length}/50</p>
+      <Dialog.Footer>
+        <Button type="button" variant="outline" disabled={renamingThread}
+          onclick={() => {
+            suppressThreadActions(renameCandidate?.id);
+            renameCandidate = null;
+            renameTitle = '';
+          }}>
+          {$t('cancel')}
+        </Button>
+        <Button type="submit"
+          disabled={renamingThread || !renameTitle.trim() || renameTitle.trim().length > 50}>
+          {renamingThread ? $t('loading') : $t('saveThreadName')}
+        </Button>
       </Dialog.Footer>
     </form>
   </Dialog.Content>
@@ -434,7 +712,12 @@
   }
 </style>
 
-<Dialog.Root open={deleteCandidate !== null} onOpenChange={(open) => { if (!open && !deletingThread) deleteCandidate = null; }}>
+<Dialog.Root open={deleteCandidate !== null} onOpenChange={(open) => {
+  if (!open && !deletingThread) {
+    suppressThreadActions(deleteCandidate?.id);
+    deleteCandidate = null;
+  }
+}}>
   <Dialog.Content>
     <Dialog.Header>
       <Dialog.Title>{$t('deleteThread')}</Dialog.Title>
@@ -443,7 +726,10 @@
       </Dialog.Description>
     </Dialog.Header>
     <Dialog.Footer>
-      <Button variant="outline" disabled={deletingThread} onclick={() => (deleteCandidate = null)}>
+      <Button variant="outline" disabled={deletingThread} onclick={() => {
+        suppressThreadActions(deleteCandidate?.id);
+        deleteCandidate = null;
+      }}>
         {$t('cancel')}
       </Button>
       <Button variant="destructive" disabled={deletingThread} onclick={deleteThread}>

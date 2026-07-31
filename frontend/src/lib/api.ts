@@ -120,10 +120,31 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ title, language })
     }),
+  renameThread: (threadId: string, title: string) =>
+    request<ChatThread>(`/api/chat/threads/${threadId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ title })
+    }),
   deleteThread: (threadId: string) =>
     request<void>(`/api/chat/threads/${threadId}`, { method: 'DELETE' }),
+  messagePage: async (
+    threadId: string,
+    page = 0,
+    size = 20
+  ): Promise<PageResponse<ChatMessage>> => {
+    const response = await request<{
+      messages: ChatMessage[];
+      page: number;
+      size: number;
+      totalElements: number;
+      totalPages: number;
+      first: boolean;
+      last: boolean;
+    }>(`/api/chat/threads/${threadId}/messages?page=${page}&size=${size}`);
+    return { ...response, items: response.messages };
+  },
   messages: async (threadId: string) =>
-    (await request<{ messages: ChatMessage[] }>(`/api/chat/threads/${threadId}/messages`)).messages,
+    (await api.messagePage(threadId, 0, 1)).items,
   postMessage: (threadId: string, content: string, language: string) =>
     request<{ userMessage: ChatMessage; assistantMessage: ChatMessage }>(
       `/api/chat/threads/${threadId}/messages`,
@@ -155,7 +176,10 @@ export const api = {
     return { ...response, items: response.executions };
   },
   execution: (id: string) => request<Execution>(`/api/executions/${id}`),
-  result: (id: string) => request<ExecutionResult>(`/api/executions/${id}/result`),
+  result: (id: string, page = 0, size = 20) =>
+    request<ExecutionResult>(
+      `/api/executions/${id}/result?page=${page}&size=${size}`
+    ),
   cancelExecution: (id: string) =>
     request<void>(`/api/executions/${id}/cancel`, { method: 'POST' }),
   deleteExecution: (id: string) =>

@@ -94,12 +94,14 @@
     window.addEventListener('focus', refreshTrees);
     window.addEventListener('kozmik:execution-deleted', onExecutionDeleted);
     window.addEventListener('kozmik:chat-thread-deleted', onChatThreadDeleted);
+    window.addEventListener('kozmik:chat-thread-renamed', onChatThreadRenamed);
     return () => {
       if (healthTimer) clearInterval(healthTimer);
       if (executionTimer) clearInterval(executionTimer);
       window.removeEventListener('focus', refreshTrees);
       window.removeEventListener('kozmik:execution-deleted', onExecutionDeleted);
       window.removeEventListener('kozmik:chat-thread-deleted', onChatThreadDeleted);
+      window.removeEventListener('kozmik:chat-thread-renamed', onChatThreadRenamed);
       systemTheme?.removeEventListener('change', applySystemTheme);
     };
   });
@@ -167,6 +169,12 @@
     const threadId = (event as CustomEvent<{ threadId: string }>).detail.threadId;
     recentThreads = recentThreads.filter((item) => item.id !== threadId);
     void loadChatTree(true);
+  }
+
+  function onChatThreadRenamed(event: Event) {
+    const thread = (event as CustomEvent<{ thread: ChatThread }>).detail?.thread;
+    if (!thread) return;
+    recentThreads = recentThreads.map((item) => item.id === thread.id ? thread : item);
   }
 
   async function loadExecutionTree(reset = false) {
@@ -446,11 +454,25 @@
             >
               {#each recentThreads as thread (thread.id)}
                 <Sidebar.MenuItem>
-                  <Sidebar.MenuButton tooltipContent={thread.title}>
-                    {#snippet child({ props })}
-                      <a href={`/chat?thread=${thread.id}`} {...props}><MessageSquareText /><span>{thread.title}</span></a>
-                    {/snippet}
-                  </Sidebar.MenuButton>
+                  <Tooltip.Provider>
+                    <Tooltip.Root>
+                      <Tooltip.Trigger>
+                        {#snippet child({ props })}
+                          <Sidebar.MenuButton>
+                            {#snippet child({ props: menuProps })}
+                              <a href={`/chat?thread=${thread.id}`} {...menuProps} {...props}>
+                                <MessageSquareText />
+                                <span class="min-w-0 truncate">{thread.title}</span>
+                              </a>
+                            {/snippet}
+                          </Sidebar.MenuButton>
+                        {/snippet}
+                      </Tooltip.Trigger>
+                      <Tooltip.Content side="right" sideOffset={8} class="max-w-sm whitespace-normal">
+                        {thread.title}
+                      </Tooltip.Content>
+                    </Tooltip.Root>
+                  </Tooltip.Provider>
                 </Sidebar.MenuItem>
               {/each}
               {#if chatTreeLoadingMore}

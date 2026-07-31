@@ -5,6 +5,7 @@
 	import { currentUser, sessionLoading } from '$lib/session';
 	import { t } from '$lib/i18n';
 	import {
+		initializeWorkspaceTabs,
 		reconcileWorkspaceTabs,
 		type WorkspaceTab
 	} from '$lib/workspace-tabs';
@@ -20,6 +21,7 @@
 		try {
 			await api.initializeCsrf();
 			const user = await api.currentUser();
+			initializeWorkspaceTabs(user.workspaceGeneration);
 			await reconcileWorkspaceTabs(workspaceTabExists);
 			currentUser.set(user);
 		} catch(error) {
@@ -35,7 +37,25 @@
 
 	async function workspaceTabExists(tab: WorkspaceTab) {
 		try {
-			if (tab.tabType === 'result') {
+			if (tab.tabType === 'chat') {
+				await api.messages(tab.threadId);
+			} else if (tab.tabType === 'entity') {
+				await api.entity(tab.entityId);
+			} else if (tab.tabType === 'page') {
+				if (tab.pageId === 'entities') {
+					await api.entityPage(0, 1);
+				} else if (tab.pageId === 'users') {
+					await api.adminUsers(0, 1);
+				} else if (tab.pageId === 'executions') {
+					await api.executionPage({ page: 0, size: 1 });
+				} else {
+					await api.executionPage({
+						page: 0,
+						size: 1,
+						statuses: ['SUCCEEDED', 'FAILED']
+					});
+				}
+			} else if (tab.tabType === 'result') {
 				await api.result(tab.executionId);
 			} else {
 				await api.execution(tab.executionId);

@@ -14,6 +14,7 @@
   import StatusBadge from '$lib/components/StatusBadge.svelte';
   import { DurableEventStream } from '$lib/sse';
   import ServerPagination from '$lib/components/ServerPagination.svelte';
+  import { openWorkspaceTab } from '$lib/workspace-tabs';
 
   let entity = $state<EntitySummary | null>(null);
   let columns = $state<ColumnDefinition[]>([]);
@@ -51,6 +52,11 @@
         api.entityColumns(id, targetColumnPage, columnSize)
       ]);
       entity = loadedEntity;
+      openWorkspaceTab({
+        entityId: loadedEntity.id,
+        title: loadedEntity.name,
+        tabType: 'entity'
+      });
       columns = columnResponse.items;
       columnPage = columnResponse.page;
       columnTotalElements = columnResponse.totalElements;

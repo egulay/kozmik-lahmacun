@@ -31,6 +31,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -64,8 +65,11 @@ public class ChatController {
 
     @GetMapping("/{threadId}/messages")
     ChatDtos.MessageListResponse messages(
-            @PathVariable UUID threadId, @AuthenticationPrincipal OidcUser user) {
-        return chatService.messages(threadId, user.getSubject());
+            @PathVariable UUID threadId,
+            @AuthenticationPrincipal OidcUser user,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+        return chatService.messages(threadId, user.getSubject(), page, size);
     }
 
     @DeleteMapping("/{threadId}")
@@ -73,6 +77,14 @@ public class ChatController {
             @PathVariable UUID threadId, @AuthenticationPrincipal OidcUser user) {
         chatService.deleteThread(threadId, user.getSubject());
         return ResponseEntity.noContent().build();
+    }
+
+    @PutMapping("/{threadId}")
+    ChatDtos.ThreadResponse rename(
+            @PathVariable UUID threadId,
+            @AuthenticationPrincipal OidcUser user,
+            @Valid @RequestBody ChatDtos.RenameThreadRequest request) {
+        return chatService.renameThread(threadId, user.getSubject(), request);
     }
 
     @PostMapping("/{threadId}/messages")

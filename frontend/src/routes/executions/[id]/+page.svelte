@@ -31,6 +31,8 @@
   let cancelling = $state(false);
   let stream: DurableEventStream | undefined;
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
+  let durationTimer: ReturnType<typeof setInterval> | undefined;
+  let durationNow = $state(Date.now());
   let cancelDialogOpen = $state(false);
 
   $effect(() => {
@@ -50,9 +52,13 @@
 
   onMount(() => {
     refreshTimer = setInterval(refresh, 2_000);
+    durationTimer = setInterval(() => {
+      durationNow = Date.now();
+    }, 1_000);
     return () => {
       stream?.close();
       if (refreshTimer) clearInterval(refreshTimer);
+      if (durationTimer) clearInterval(durationTimer);
     };
   });
 
@@ -245,7 +251,11 @@
     <Card.Root><Card.Header><Card.Description>{$t('status')}</Card.Description><Card.Title><StatusBadge status={execution.status} /></Card.Title></Card.Header></Card.Root>
     <Card.Root><Card.Header><Card.Description>{$t('entity')}</Card.Description><Card.Title class="truncate text-base">{localizedEntity?.name ?? execution.entityName ?? execution.entityId}</Card.Title></Card.Header></Card.Root>
     <Card.Root><Card.Header><Card.Description>{$t('requestedAt')}</Card.Description><Card.Title class="text-base">{formatDate(execution.requestedAt, $locale === 'tr' ? 'tr-TR' : 'en-US')}</Card.Title></Card.Header></Card.Root>
-    <Card.Root><Card.Header><Card.Description>{$t('duration')}</Card.Description><Card.Title class="text-base">{formatDuration(execution.startedAt, execution.completedAt, $locale === 'tr' ? 'tr-TR' : 'en-US')}</Card.Title></Card.Header></Card.Root>
+    <Card.Root><Card.Header><Card.Description>{$t('duration')}</Card.Description><Card.Title class="text-base">{formatDuration(
+      execution.requestedAt,
+      execution.completedAt ?? new Date(durationNow).toISOString(),
+      $locale === 'tr' ? 'tr-TR' : 'en-US'
+    )}</Card.Title></Card.Header></Card.Root>
     <Card.Root>
       <Card.Header><Card.Description>{$t('plan')}</Card.Description><Card.Title class="truncate text-base">{orderLabel}</Card.Title></Card.Header>
       <Card.Content>

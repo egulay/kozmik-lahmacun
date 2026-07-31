@@ -6,6 +6,7 @@ export interface CurrentUser {
   displayName: string;
   email: string;
   roles: Role[];
+  workspaceGeneration: string;
 }
 
 export interface ChatThread {
@@ -115,6 +116,10 @@ export interface ExecutionResult {
   summaryStatus: string;
   managementSummary?: string | null;
   metrics?: unknown;
+  previewPage: number;
+  previewSize: number;
+  previewTotalElements: number;
+  previewTotalPages: number;
 }
 
 export interface PageResponse<T> {

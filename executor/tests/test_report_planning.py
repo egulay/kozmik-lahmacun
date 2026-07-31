@@ -68,6 +68,46 @@ def test_validation_feedback_regenerates_malformed_array_fields():
     assert order.payload.select[0].column == "amount"
 
 
+def test_categorical_business_wording_is_regenerated_to_an_approved_value():
+    planning_request = request()
+    category = planning_request.authorized_schema.columns[1].model_copy(update={
+        "categorical_values": ["STORE", "WEB", "PARTNER"],
+    })
+    planning_request.authorized_schema.columns[1] = category
+    entity_id = str(planning_request.authorized_schema.entity_id)
+
+    def report(value: str) -> dict:
+        return {
+            "schemaVersion": "1.0", "executionType": "REPORT",
+            "entityId": entity_id, "requestedLanguage": "en",
+            "requestSummary": "Online category totals",
+            "constraints": {"maxPreviewRows": 10, "timeoutSeconds": 60},
+            "payload": {
+                "select": [{"column": "category"}],
+                "filters": [{"column": "category", "operator": "EQ", "value": value}],
+                "groupBy": [], "temporalGroupBy": [], "aggregations": [],
+                "orderBy": [], "limit": 100, "chartHints": [],
+            },
+        }
+
+    class Provider:
+        calls = 0
+
+        async def complete_json(self, _system_prompt: str, user_prompt: str) -> dict:
+            self.calls += 1
+            if self.calls == 1:
+                return report("Online")
+            assert "Approved values: STORE, WEB, PARTNER" in user_prompt
+            return report("WEB")
+
+    provider = Provider()
+    order = asyncio.run(_generate_report_order(provider, planning_request))
+
+    assert provider.calls == 2
+    assert order.payload.filters[0].value == "WEB"
+    assert order.constraints.max_preview_rows == 100
+
+
 def test_monthly_report_normalizes_bounded_date_filter_and_validates():
     planning_request = request()
     raw = {
@@ -151,6 +191,8 @@ def test_monthly_report_normalizes_invented_month_alias():
     assert order.payload.select[0].alias == "sales_month"
     assert order.payload.temporal_group_by[0].column == "sale_date"
     assert order.payload.temporal_group_by[0].granularity.value == "MONTH"
+    assert order.payload.temporal_group_by[0].display_label == "Sales Month"
+    assert order.payload.select[0].display_label == "Sales Month"
     assert order.payload.temporal_group_by[0].alias == "sales_month"
 
 
@@ -166,7 +208,7 @@ def test_monthly_report_removes_redundant_daily_group_and_exposes_month_alias():
                 "column": "sale_date", "alias": "sale_date",
                 "displayLabel": "Sale Date",
             }],
-            "filters": [], "groupBy": ["sale_date"],
+            "filters": [], "groupBy": ["sale_date", "month"],
             "temporalGroupBy": [{
                 "column": "sale_date", "granularity": "MONTH", "alias": "month",
                 "displayLabel": "Month",
@@ -193,6 +235,36 @@ def test_monthly_report_removes_redundant_daily_group_and_exposes_month_alias():
     assert order.payload.select[0].column == "sale_date"
     assert order.payload.select[0].alias == "month"
     assert order.payload.select[0].display_label == "Month"
+
+
+def test_report_resolves_selected_group_alias_to_authorized_source_column():
+    planning_request = request()
+    raw = {
+        "schemaVersion": "1.0", "executionType": "REPORT",
+        "entityId": str(planning_request.authorized_schema.entity_id),
+        "requestedLanguage": "en", "requestSummary": "Totals by category",
+        "constraints": {"maxPreviewRows": 100, "timeoutSeconds": 60},
+        "payload": {
+            "select": [{
+                "column": "category", "alias": "category_name",
+                "displayLabel": "Category",
+            }],
+            "filters": [], "groupBy": ["category_name"],
+            "temporalGroupBy": [],
+            "aggregations": [{
+                "function": "SUM", "column": "amount", "alias": "total_amount",
+            }],
+            "orderBy": [], "limit": 100, "chartHints": [],
+        },
+    }
+
+    class Provider:
+        async def complete_json(self, system_prompt: str, user_prompt: str) -> dict:
+            return raw
+
+    order = asyncio.run(_generate_report_order(Provider(), planning_request))
+
+    assert order.payload.group_by == ["category"]
 
 
 def test_temporal_grouping_rejects_non_temporal_column():

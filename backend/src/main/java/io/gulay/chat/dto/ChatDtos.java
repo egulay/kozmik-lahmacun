@@ -18,8 +18,11 @@ public final class ChatDtos {
     }
 
     public record CreateThreadRequest(
-            @NotBlank @Size(max = 200) String title,
+            @NotBlank @Size(max = 50) String title,
             @NotBlank @Pattern(regexp = "[a-z]{2}(-[A-Z]{2})?") String language) {
+    }
+
+    public record RenameThreadRequest(@NotBlank @Size(max = 50) String title) {
     }
 
     public record PostMessageRequest(
@@ -43,7 +46,10 @@ public final class ChatDtos {
                                   String errorCode, Instant createdAt, Instant completedAt) {
     }
 
-    public record MessageListResponse(String schemaVersion, List<MessageResponse> messages) {
+    public record MessageListResponse(
+            String schemaVersion, List<MessageResponse> messages,
+            int page, int size, long totalElements, int totalPages,
+            boolean first, boolean last) {
     }
 
     public record PostedMessageResponse(

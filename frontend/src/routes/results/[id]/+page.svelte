@@ -21,6 +21,7 @@
   import { closeExecutionWorkspace, openWorkspaceTab } from '$lib/workspace-tabs';
   import DeleteExecutionButton from '$lib/components/DeleteExecutionButton.svelte';
   import PdfExportButton from '$lib/components/PdfExportButton.svelte';
+  import ServerPagination from '$lib/components/ServerPagination.svelte';
   import type { Execution } from '$lib/types';
   import {
     formatDate,
@@ -31,10 +32,16 @@
   } from '$lib/utils';
 
   let result = $state<ExecutionResult | null>(null);
+  let previewData = $state<unknown>(null);
+  let previewPage = $state(0);
+  let previewSize = $state(20);
+  let previewTotalElements = $state(0);
+  let previewTotalPages = $state(0);
   let execution = $state<Execution | null>(null);
   let localizedEntity = $state<EntitySummary | null>(null);
   let localizedColumns = $state<ColumnDefinition[]>([]);
   let loading = $state(true);
+  let previewLoading = $state(false);
   let error = $state('');
   let loadSequence = 0;
 
@@ -59,6 +66,11 @@
       ]);
       if (sequence !== loadSequence || $page.params.id !== executionId) return;
       result = loadedResult;
+      previewData = loadedResult?.preview ?? null;
+      previewPage = loadedResult?.previewPage ?? 0;
+      previewSize = loadedResult?.previewSize ?? 20;
+      previewTotalElements = loadedResult?.previewTotalElements ?? 0;
+      previewTotalPages = loadedResult?.previewTotalPages ?? 0;
       execution = loadedExecution;
       localizedEntity = loadedEntity;
       localizedColumns = loadedSchema?.columns ?? [];
@@ -73,6 +85,10 @@
     } catch {
       if (sequence !== loadSequence || $page.params.id !== executionId) return;
       result = null;
+      previewData = null;
+      previewPage = 0;
+      previewTotalElements = 0;
+      previewTotalPages = 0;
       execution = null;
       localizedEntity = null;
       localizedColumns = [];
@@ -86,11 +102,16 @@
   const metrics = $derived(normalizeCards(
     result?.metrics ?? metricItems(result?.kpis) ?? extractMetrics(result?.kpis)
   ));
-  const warnings = $derived(normalizeList(result?.warnings));
-  const previewRows = $derived(normalizeRows(result?.preview).slice(0, 20));
+  const previewRows = $derived(normalizeRows(previewData));
+  const warnings = $derived(normalizeWarnings(
+    result?.warnings,
+    previewTotalElements,
+    previewSize,
+    result?.rowCount ?? previewRows.length
+  ));
   const columns = $derived(previewRows.length ? Object.keys(previewRows[0]) : []);
-  const columnTypes = $derived(normalizeColumnTypes(result?.preview));
-  const columnLabels = $derived(normalizeColumnLabels(result?.preview));
+  const columnTypes = $derived(normalizeColumnTypes(previewData));
+  const columnLabels = $derived(normalizeColumnLabels(previewData));
   const charts = $derived(normalizeCharts(result?.charts));
   const isMl = $derived(Boolean(execution?.executionType?.toUpperCase().includes('ML') || metrics.length));
   const orderPayload = $derived.by(() => {
@@ -236,15 +257,51 @@
     return 'text-2xl';
   }
 
-  function normalizeList(value: unknown): string[] {
-    if (!value) return [];
-    if (Array.isArray(value)) return value.map((item) => {
-      if (typeof item === 'string') return item;
+  function normalizeWarnings(
+    value: unknown,
+    availableRows: number,
+    pageSize: number,
+    totalRows: number
+  ): string[] {
+    const normalized = Array.isArray(value) ? value.flatMap((item) => {
+      if (typeof item === 'string') return item.trim() ? [item] : [];
+      if (!item || typeof item !== 'object') return [];
       const warning = item as Record<string, unknown>;
-      if (warning.code === 'WHAT_IF_NOT_CAUSAL') return $t('whatIfNotCausal');
-      return String(warning.message ?? JSON.stringify(item));
-    });
-    return [String(value)];
+      if (warning.code === 'RESULT_TRUNCATED') return [];
+      if (warning.code === 'WHAT_IF_NOT_CAUSAL') return [$t('whatIfNotCausal')];
+      return typeof warning.message === 'string' && warning.message.trim()
+        ? [warning.message]
+        : [];
+    }) : typeof value === 'string' && value.trim() ? [value] : [];
+    if (availableRows > pageSize) {
+      normalized.unshift($t('resultRowsPaged', { size: pageSize }));
+    }
+    if (totalRows > availableRows) {
+      normalized.push($t('resultRowsLimited', {
+        shown: availableRows,
+        total: totalRows
+      }));
+    }
+    return [...new Set(normalized)];
+  }
+
+  async function loadPreview(targetPage: number, targetSize: number) {
+    const executionId = $page.params.id;
+    if (!executionId || !result) return;
+    previewLoading = true;
+    try {
+      const loadedPage = await api.result(executionId, targetPage, targetSize);
+      previewData = loadedPage.preview;
+      previewPage = loadedPage.previewPage;
+      previewSize = loadedPage.previewSize;
+      previewTotalElements = loadedPage.previewTotalElements;
+      previewTotalPages = loadedPage.previewTotalPages;
+      error = '';
+    } catch {
+      error = $t('apiUnavailable');
+    } finally {
+      previewLoading = false;
+    }
   }
 
   function normalizeRows(value: unknown): Array<Record<string, unknown>> {
@@ -302,6 +359,25 @@
           $locale === 'tr' ? 'tr-TR' : 'en-US',
           columnTypes[column]
         );
+  }
+
+  function resultColumnLabel(column: string): string {
+    const granularity = temporalGranularities[column];
+    if (!granularity) {
+      return columnLabels[column]
+        ?? humanizeField(column, $locale === 'tr' ? 'tr-TR' : 'en-US');
+    }
+    if ($locale === 'tr') {
+      return ({
+        DAY: 'Gün',
+        WEEK: 'Hafta',
+        MONTH: 'Ay',
+        QUARTER: 'Çeyrek',
+        YEAR: 'Yıl'
+      } as Record<string, string>)[granularity.toUpperCase()]
+        ?? humanizeField(column, 'tr-TR');
+    }
+    return humanizeField(column, 'en-US');
   }
 
   function normalizeCharts(value: unknown): Array<{
@@ -576,6 +652,13 @@
     </Card.Root>
   {/if}
 
+  {#if result.rowCount === 0}
+    <Alert.Root class="mb-6">
+      <Info />
+      <Alert.Title>{$t('emptyExecutionResultTitle')}</Alert.Title>
+      <Alert.Description>{$t('emptyExecutionResultBody')}</Alert.Description>
+    </Alert.Root>
+  {:else}
   <Card.Root class="mb-6">
     <Card.Header>
       <Card.Description>{$t('summary')}</Card.Description>
@@ -646,15 +729,31 @@
   <section aria-labelledby="preview-title">
     <h2 id="preview-title" class="mb-3 mt-6 text-lg font-semibold">{$t('preview')}</h2>
     <Card.Root class="pdf-breakable">
-      <Card.Header><Card.Title class="flex items-center gap-2 text-base"><Info size={17} />{$t('rowsShown', { shown: previewRows.length, total: result.rowCount })}</Card.Title><Card.Description>{$t('previewLimited')}</Card.Description></Card.Header>
+      <Card.Header><Card.Title class="flex items-center gap-2 text-base"><Info size={17} />{$t('previewPageRows', {
+        from: previewTotalElements ? previewPage * previewSize + 1 : 0,
+        to: Math.min((previewPage + 1) * previewSize, previewTotalElements),
+        total: previewTotalElements
+      })}</Card.Title><Card.Description>{$t('previewLimited', {
+        total: previewTotalElements,
+        size: previewSize
+      })}</Card.Description></Card.Header>
       <Card.Content>
       {#if previewRows.length}
         <div class="overflow-x-auto">
-          <Table.Root><Table.Header><Table.Row>{#each columns as column}<Table.Head>{columnLabels[column] ?? humanizeField(column, $locale === 'tr' ? 'tr-TR' : 'en-US')}</Table.Head>{/each}</Table.Row></Table.Header><Table.Body>
+          <Table.Root><Table.Header><Table.Row>{#each columns as column}<Table.Head>{resultColumnLabel(column)}</Table.Head>{/each}</Table.Row></Table.Header><Table.Body>
             {#each previewRows as row}<Table.Row>{#each columns as column}<Table.Cell>{formatResultValue(row[column], column)}</Table.Cell>{/each}</Table.Row>{/each}
           </Table.Body></Table.Root>
         </div>
       {:else}<p class="text-sm text-muted-foreground">{$t('noData')}</p>{/if}
+      <ServerPagination
+        page={previewPage}
+        size={previewSize}
+        totalElements={previewTotalElements}
+        totalPages={previewTotalPages}
+        disabled={previewLoading}
+        onPage={(value) => void loadPreview(value, previewSize)}
+        onSize={(value) => void loadPreview(0, value)}
+      />
       </Card.Content>
     </Card.Root>
   </section>
@@ -714,5 +813,6 @@
       {/each}
     </Card.Content>
   </Card.Root>
+  {/if}
 {/if}
 </div>

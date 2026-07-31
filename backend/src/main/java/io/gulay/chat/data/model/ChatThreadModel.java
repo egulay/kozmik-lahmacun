@@ -51,4 +51,9 @@ public class ChatThreadModel {
         updatedAt = now;
     }
 
+    public void rename(String newTitle, Instant now) {
+        title = newTitle;
+        updatedAt = now;
+    }
+
 }

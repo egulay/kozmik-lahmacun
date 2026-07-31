@@ -14,6 +14,7 @@
   import StatusBadge from '$lib/components/StatusBadge.svelte';
   import ServerPagination from '$lib/components/ServerPagination.svelte';
   import DeleteExecutionButton from '$lib/components/DeleteExecutionButton.svelte';
+  import { openWorkspaceTab } from '$lib/workspace-tabs';
 
   let results = $state<Execution[]>([]);
   let loading = $state(true);
@@ -25,6 +26,11 @@
   let totalPages = $state(0);
 
   onMount(() => {
+    openWorkspaceTab({
+      pageId: 'results',
+      title: $t('results'),
+      tabType: 'page'
+    });
     void load();
     refreshTimer = setInterval(() => void load(false), 5_000);
     window.addEventListener('focus', focusRefresh);

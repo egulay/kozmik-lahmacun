@@ -28,3 +28,4 @@ SET search_path TO kozmik_lahmacun;
 \ir db/migration/V19__chat_thread_cascade_cleanup.sql
 \ir db/migration/V20__localized_entity_metadata.sql
 \ir db/migration/V21__hard_delete_retention.sql
+\ir db/migration/V22__governed_categorical_vocabulary.sql

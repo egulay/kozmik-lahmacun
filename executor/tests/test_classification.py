@@ -2,7 +2,8 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from kozmik_executor.chat.models import ClassificationRequest
+from kozmik_executor.chat.api import _governed_intent_override
+from kozmik_executor.chat.models import ClassificationRequest, IntentType
 from kozmik_executor.main import app
 
 
@@ -39,6 +40,25 @@ def test_classifies_conversational_report_and_ml(monkeypatch) -> None:
     assert classify(monkeypatch, "Hello there").json()["intent"] == "CONVERSATIONAL"
     assert classify(monkeypatch, "Create a report with sum by region").json()["intent"] == "REPORT"
     assert classify(monkeypatch, "Forecast next month sales").json()["intent"] == "ML"
+
+
+def test_descriptive_aggregations_and_charts_override_erroneous_ml_classification() -> None:
+    payload = body(
+        "Analyze call activity by month and region. Show total call count, average duration, "
+        "compare call types, identify unusual observed patterns, and include a pie chart."
+    )
+    request = ClassificationRequest.model_validate(payload)
+
+    assert _governed_intent_override(request, IntentType.ML) == IntentType.REPORT
+
+
+def test_explicit_prediction_is_not_overridden_by_report_words() -> None:
+    payload = body(
+        "Predict expected call charge and show an actual-versus-predicted chart."
+    )
+    request = ClassificationRequest.model_validate(payload)
+
+    assert _governed_intent_override(request, IntentType.REPORT) == IntentType.ML
 
 
 def test_contract_rejects_raw_row_payload(monkeypatch) -> None:

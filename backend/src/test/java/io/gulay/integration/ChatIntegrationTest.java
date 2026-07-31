@@ -41,6 +41,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import tools.jackson.databind.ObjectMapper;
@@ -132,6 +133,33 @@ class ChatIntegrationTest {
                 new ChatDtos.PostMessageRequest("Satışları analiz et", "tr"));
 
         assertThat(posted.streamRequest().language()).isEqualTo("tr");
+    }
+
+    @Test
+    void renamesOnlyOwnedThreadsAndEnforcesTitleLimit() throws Exception {
+        val owned = chatService.createThread(owner.getKeycloakUserId(),
+                new ChatDtos.CreateThreadRequest("Original title", "en"));
+
+        mockMvc.perform(put("/api/chat/threads/{threadId}", owned.id())
+                        .with(csrf()).with(login(owner)).contentType("application/json")
+                        .content(objectMapper.writeValueAsString(
+                                new ChatDtos.RenameThreadRequest("Renamed conversation"))))
+                .andExpect(status().isOk());
+
+        assertThat(threads.findById(owned.id()).orElseThrow().getTitle())
+                .isEqualTo("Renamed conversation");
+
+        mockMvc.perform(put("/api/chat/threads/{threadId}", owned.id())
+                        .with(csrf()).with(login(other)).contentType("application/json")
+                        .content(objectMapper.writeValueAsString(
+                                new ChatDtos.RenameThreadRequest("Not allowed"))))
+                .andExpect(status().isNotFound());
+
+        mockMvc.perform(put("/api/chat/threads/{threadId}", owned.id())
+                        .with(csrf()).with(login(owner)).contentType("application/json")
+                        .content(objectMapper.writeValueAsString(
+                                new ChatDtos.RenameThreadRequest("x".repeat(51)))))
+                .andExpect(status().isBadRequest());
     }
 
     @Test
@@ -252,6 +280,40 @@ class ChatIntegrationTest {
         assertThat(last.streamRequest().history()).hasSize(20);
         assertThat(last.streamRequest().history().get(0).content()).isEqualTo("answer-1");
         assertThat(last.streamRequest().history().get(19).content()).isEqualTo("message-11");
+    }
+
+    @Test
+    void pagesDurableMessagesFromNewestWindowInChronologicalDisplayOrder() throws Exception {
+        val thread = chatService.createThread(owner.getKeycloakUserId(),
+                new ChatDtos.CreateThreadRequest("Paged history", "en"));
+        for (var index = 0; index < 12; index++) {
+            val posted = chatService.post(thread.id(), owner.getKeycloakUserId(),
+                    new ChatDtos.PostMessageRequest("message-" + index, "en"));
+            chatService.complete(posted.response().assistantMessage().id(),
+                    "answer-" + index, "mock", "mock-v1");
+        }
+
+        val newest = objectMapper.readTree(mockMvc.perform(
+                        get("/api/chat/threads/{id}/messages", thread.id())
+                                .param("page", "0").param("size", "5")
+                                .with(login(owner)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+        val oldest = objectMapper.readTree(mockMvc.perform(
+                        get("/api/chat/threads/{id}/messages", thread.id())
+                                .param("page", "4").param("size", "5")
+                                .with(login(owner)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString());
+
+        assertThat(newest.get("messages")).hasSize(5);
+        assertThat(newest.get("messages").get(0).get("sequenceNumber").asLong()).isEqualTo(20);
+        assertThat(newest.get("messages").get(4).get("sequenceNumber").asLong()).isEqualTo(24);
+        assertThat(newest.get("totalElements").asLong()).isEqualTo(24);
+        assertThat(newest.get("last").asBoolean()).isFalse();
+        assertThat(oldest.get("messages")).hasSize(4);
+        assertThat(oldest.get("messages").get(0).get("sequenceNumber").asLong()).isEqualTo(1);
+        assertThat(oldest.get("last").asBoolean()).isTrue();
     }
 
     @Test

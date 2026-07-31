@@ -25,7 +25,7 @@ const messages = {
     loading: 'Yükleniyor…',
     retry: 'Yeniden dene',
     unavailable: 'Bu bilgi şu anda kullanılamıyor.',
-    apiUnavailable: 'Java hizmetine ulaşılamadı. Kalıcı verileriniz güvende; bağlantı kurulunca yeniden yükleyin.',
+    apiUnavailable: 'Backend servisine ulaşılamadı. Kalıcı verileriniz güvende; bağlantı kurulunca yeniden yükleyin.',
     theme: 'Temayı değiştir',
     language: 'Dil',
     light: 'Açık',
@@ -36,6 +36,9 @@ const messages = {
     newThread: 'Yeni sohbet',
     noThreads: 'Henüz sohbet yok',
     createThread: 'Sohbet oluştur',
+    renameThread: 'Sohbeti yeniden adlandır',
+    saveThreadName: 'Adı kaydet',
+    threadTitleTooLong: 'Sohbet başlığı en fazla 50 karakter olabilir.',
     deleteThread: 'Sohbeti sil',
     deleteThreadConfirm: '“{title}” sohbetini silmek istediğinizden emin misiniz?',
     threadTitle: 'Sohbet başlığı',
@@ -87,6 +90,8 @@ const messages = {
     resultReady: 'Sonuç hazır',
     viewResult: 'Sonucu görüntüle',
     resultTitle: 'Çalıştırma sonucu',
+    emptyExecutionResultTitle: 'Eşleşen veri bulunamadı',
+    emptyExecutionResultBody: 'Bu çalıştırma herhangi bir veri döndürmedi. İsteği veya filtreleri gözden geçirip yeniden deneyebilirsiniz.',
     summary: 'Yönetici özeti',
     summaryPending: 'Özet hazırlanıyor. Analitik sonuç kullanılabilir.',
     summaryFailed: 'Özet üretilemedi; analitik sonuç kullanılmaya devam edebilir.',
@@ -106,6 +111,9 @@ const messages = {
     artifactGuidance: 'Tam sonuç Parquet biçiminde kontrollü nesne deposundadır.',
     reporterGuidance: 'Önizleme yönetişim sınırlarıyla kısıtlıdır. Tam veri doğrudan tarayıcıda gösterilmez.',
     rowsShown: '{shown} satır gösteriliyor; toplam {total} satır.',
+    resultRowsPaged: 'Önizleme, sayfa başına {size} satır olacak şekilde gösterilmektedir.',
+    resultRowsLimited: 'Tarayıcı önizlemesinde, Parquet biçimindeki tam sonuçta bulunan {total} satırın {shown} satırı yer almaktadır.',
+    previewPageRows: 'Önizlemedeki {total} satırın {from}-{to} arası gösteriliyor.',
     chartAlternative: 'Grafiğin metinsel özeti',
     entitiesTitle: 'Veri Varlıkları',
     entitiesBody: 'Raporlama ve rol tabanlı makine öğrenmesi çalışmalarında kullanılabilen veri varlıkları.',
@@ -175,7 +183,7 @@ const messages = {
     governedAnalytics: 'Yönetilen analitik',
     featureUnavailable: 'Bu işlem için Java API desteği bekleniyor.'
     ,openResults: 'Açık sonuçlar'
-    ,openExecutions: 'Açık çalışmalar'
+    ,openExecutions: 'Açık sekmeler'
     ,closeTab: 'Sekmeyi kapat'
     ,requestedAnalysis: 'İstenen analiz'
     ,modelUsed: 'Seçilen yaklaşım'
@@ -190,11 +198,11 @@ const messages = {
     ,rowsPerPage: 'Sayfa başına'
     ,previousPage: 'Önceki sayfa'
     ,nextPage: 'Sonraki sayfa'
-    ,previewLimited: 'Tarayıcı önizlemesi güvenlik ve kullanılabilirlik için en fazla 20 satırla sınırlıdır.'
+    ,previewLimited: 'Sistem en fazla 100 önizleme satırı saklayabilir. Bu sonuçta {total} önizleme satırı bulunur ve sayfa başına en fazla {size} satır gösterilir.'
     ,recentThreads: 'Son sohbetler'
     ,recentWork: 'Raporlar ve modeller'
-    ,registeredEntities: 'PostgreSQL üzerinde kayıtlı veri varlıkları'
-    ,registeredSchemas: 'Kayıtlı veri yapıları'
+    ,registeredEntities: 'Kullanılabilir veri varlıkları'
+    ,registeredSchemas: 'Analize hazır veri varlıkları'
     ,delete: 'Sil'
     ,deleting: 'Siliniyor…'
     ,deleteExecution: 'Çalışmayı sil'
@@ -225,7 +233,7 @@ const messages = {
     thinking: 'Thinking',
     retry: 'Try again',
     unavailable: 'This information is currently unavailable.',
-    apiUnavailable: 'The Java service is unreachable. Your durable data is safe; reload when the connection returns.',
+    apiUnavailable: 'The Backend service is unreachable. Your durable data is safe; reload when the connection returns.',
     theme: 'Change theme',
     language: 'Language',
     light: 'Light',
@@ -238,6 +246,9 @@ const messages = {
     deleteThreadConfirm: 'Are you sure you want to delete “{title}”?',
     noThreads: 'No conversations yet',
     createThread: 'Create conversation',
+    renameThread: 'Rename chat',
+    saveThreadName: 'Save name',
+    threadTitleTooLong: 'Conversation title can contain at most 50 characters.',
     threadTitle: 'Conversation title',
     messagePlaceholder: 'Describe a report or ask a question in natural language…',
     send: 'Send',
@@ -286,6 +297,8 @@ const messages = {
     resultReady: 'Result ready',
     viewResult: 'View result',
     resultTitle: 'Execution Result',
+    emptyExecutionResultTitle: 'No matching data was found',
+    emptyExecutionResultBody: 'This execution returned no data. Review the request or its filters and try again.',
     summary: 'Management summary',
     summaryPending: 'The summary is being prepared. The analytical result is available.',
     summaryFailed: 'Summary generation failed; the analytical result remains usable.',
@@ -305,6 +318,9 @@ const messages = {
     artifactGuidance: 'The full result is stored as Parquet in the governed object store.',
     reporterGuidance: 'The preview is bounded by governance policy. Full data is not rendered directly in the browser.',
     rowsShown: 'Showing {shown} rows out of {total}.',
+    resultRowsPaged: 'The preview is displayed in pages of {size} rows.',
+    resultRowsLimited: 'The browser preview contains {shown} of the {total} rows stored in the complete Parquet result.',
+    previewPageRows: 'Showing rows {from}-{to} of {total} preview rows.',
     chartAlternative: 'Text summary of chart',
     entitiesTitle: 'Data Entities',
     entitiesBody: 'Data entities available for reporting and role-based machine learning executions.',
@@ -374,7 +390,7 @@ const messages = {
     governedAnalytics: 'Governed analytics',
     featureUnavailable: 'Java API support for this operation is pending.'
     ,openResults: 'Open results'
-    ,openExecutions: 'Open executions'
+    ,openExecutions: 'Open tabs'
     ,closeTab: 'Close tab'
     ,requestedAnalysis: 'Requested analysis'
     ,modelUsed: 'Selected approach'
@@ -389,10 +405,10 @@ const messages = {
     ,rowsPerPage: 'Rows per page'
     ,previousPage: 'Previous page'
     ,nextPage: 'Next page'
-    ,previewLimited: 'The browser preview is limited to 20 rows for security and usability.'
+    ,previewLimited: 'The system can retain up to 100 preview rows. This result contains {total} preview rows, displayed in pages of up to {size}.'
     ,recentThreads: 'Recent conversations'
     ,recentWork: 'Reports and models'
-    ,registeredEntities: 'Data entities registered in PostgreSQL'
+    ,registeredEntities: 'Available data entities'
     ,delete: 'Delete'
     ,deleting: 'Deleting…'
     ,deleteExecution: 'Delete execution'
@@ -400,7 +416,7 @@ const messages = {
     ,deleteExecutionBody: 'You are about to permanently delete this execution and its associated result. Its execution history, result metadata, and Parquet/model objects in MinIO will be removed. This action cannot be undone.'
     ,deleteExecutionFailed: 'The execution could not be deleted safely. Its durable records were retained; please try again.'
     ,keepExecution: 'Cancel'
-    ,registeredSchemas: 'Registered data structures'
+    ,registeredSchemas: 'Data entities ready for analysis'
   }
 } as const;
 

@@ -98,6 +98,7 @@ class MetadataEnricher:
                 ordinalPosition=index + 1,
                 businessNameTr=suggested.business_name_tr,
                 descriptionTr=suggested.description_tr,
+                categoricalValues=structural.categorical_values,
             ))
         return StreamEntityDescriptor(
             id=entity_id,

@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import jakarta.validation.Valid;
 
@@ -42,5 +43,12 @@ public class InternalEntityController {
     EntityDtos.EntitySchemaResponse resolveOrRegister(
             @Valid @RequestBody EntityDtos.StreamEntityDescriptor descriptor) {
         return service.resolveOrRegisterStreamEntity(descriptor);
+    }
+
+    @PutMapping("/{entityId}/categorical-vocabulary")
+    EntityDtos.EntitySchemaResponse updateCategoricalVocabulary(
+            @PathVariable UUID entityId,
+            @Valid @RequestBody EntityDtos.CategoricalVocabularyUpdate request) {
+        return service.updateCategoricalVocabulary(entityId, request);
     }
 }

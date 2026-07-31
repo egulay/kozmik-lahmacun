@@ -1,12 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatDisplayValue,
+  formatDuration,
   formatManagementSummary,
   formatTemporalBucket,
   humanizeField
 } from './utils';
 
 describe('result presentation formatting', () => {
+  it('counts execution duration in seconds from the beginning', () => {
+    expect(formatDuration(
+      '2026-07-31T08:00:00.000Z',
+      '2026-07-31T08:00:00.900Z',
+      'en-US'
+    )).toBe('0 sec');
+    expect(formatDuration(
+      '2026-07-31T08:00:00.000Z',
+      '2026-07-31T08:01:02.000Z',
+      'en-US'
+    )).toBe('1 min 2 sec');
+  });
+
   it('formats governed decimal values without machine precision noise', () => {
     expect(formatDisplayValue('6525519.300000', 'en-US', 'DECIMAL(20,6)'))
       .toBe('6,525,519.3');

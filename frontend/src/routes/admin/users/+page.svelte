@@ -18,6 +18,7 @@
   import PageHeader from '$lib/components/PageHeader.svelte';
   import StateView from '$lib/components/StateView.svelte';
   import ServerPagination from '$lib/components/ServerPagination.svelte';
+  import { openWorkspaceTab } from '$lib/workspace-tabs';
 
   let users = $state<ManagedUser[]>([]);
   let loading = $state(true);
@@ -33,7 +34,14 @@
   let roles = $state<Role[]>([]);
   let saving = $state(false);
 
-  onMount(load);
+  onMount(() => {
+    openWorkspaceTab({
+      pageId: 'users',
+      title: $t('users'),
+      tabType: 'page'
+    });
+    void load();
+  });
 
   async function load(targetPage = page) {
     loading = true;

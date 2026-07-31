@@ -136,6 +136,17 @@ def test_spark_csv_schema_mismatch_is_rejected(spark):
             uuid4(), "raw", "incoming/source.csv", schema()))
 
 
+def test_csv_discovery_captures_only_bounded_non_identifier_categories(spark):
+    store = MemoryMinio(
+        b"sale_id,channel\nS-1,WEB\nS-2,STORE\nS-3,PARTNER\n")
+
+    columns = asyncio.run(
+        SparkCsvIngester(spark, store).discover("raw", "incoming/source.csv"))
+
+    assert columns[0].categorical_values == []
+    assert columns[1].categorical_values == ["PARTNER", "STORE", "WEB"]
+
+
 def test_object_created_to_completed_status_end_to_end(spark):
     source_event, bucket, key, entity_id = parse_object_created(notification())
     governed_schema = schema()
@@ -145,6 +156,13 @@ def test_object_created_to_completed_status_end_to_end(spark):
     class SchemaClient:
         async def load(self, requested_entity):
             assert requested_entity == entity_id
+            return governed_schema
+
+        async def update_categorical_vocabulary(self, requested_entity, columns):
+            assert requested_entity == entity_id
+            assert [item.column_name for item in columns] == [
+                "sale_id", "quantity", "net_amount",
+            ]
             return governed_schema
 
     async def publish(event):

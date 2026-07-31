@@ -110,9 +110,11 @@ public class ExecutionController {
     ResultDtos.ResultResponse result(
             @PathVariable java.util.UUID executionId,
             @AuthenticationPrincipal OidcUser user,
-            Authentication authentication) {
+            Authentication authentication,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(50) int size) {
         return resultQueryService.result(
-                executionId, user.getSubject(), roles(authentication));
+                executionId, user.getSubject(), roles(authentication), page, size);
     }
 
     @PostMapping("/{executionId}/cancel")

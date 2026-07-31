@@ -163,7 +163,8 @@ class ControlPlaneIntegrationTest {
                 .andExpect(jsonPath("$.username").value("ada"))
                 .andExpect(jsonPath("$.displayName").value("Ada Lovelace"))
                 .andExpect(jsonPath("$.email").value("ada@example.test"))
-                .andExpect(jsonPath("$.roles[0]").value("REPORTER"));
+                .andExpect(jsonPath("$.roles[0]").value("REPORTER"))
+                .andExpect(jsonPath("$.workspaceGeneration").isNotEmpty());
     }
 
     @Test

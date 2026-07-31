@@ -105,6 +105,23 @@ def validate_order(order: ReportOrder, request: ReportPlanningRequest) -> None:
             issues.append(ValidationIssue(code="OPERATOR_TYPE_MISMATCH",
                                           path=f"{path}.operator",
                                           message="Operator is not approved for the column type"))
+        vocabulary = getattr(metadata, "categorical_values", []) if metadata else []
+        if vocabulary and item.operator in {
+            FilterOperator.EQ, FilterOperator.NE, FilterOperator.IN, FilterOperator.NOT_IN,
+        }:
+            supplied = item.values if item.operator in {
+                FilterOperator.IN, FilterOperator.NOT_IN,
+            } else [item.value]
+            invalid = [value for value in (supplied or []) if value not in vocabulary]
+            if invalid:
+                issues.append(ValidationIssue(
+                    code="CATEGORICAL_VALUE_NOT_APPROVED",
+                    path=f"{path}.value",
+                    message=(
+                        f"Use an exact approved value for '{item.column}'. "
+                        f"Approved values: {', '.join(vocabulary)}"
+                    ),
+                ))
         if item.operator in {FilterOperator.IN, FilterOperator.NOT_IN, FilterOperator.BETWEEN}:
             expected = 2 if item.operator == FilterOperator.BETWEEN else 1
             if item.values is None or len(item.values) < expected:

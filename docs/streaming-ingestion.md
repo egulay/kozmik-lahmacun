@@ -9,6 +9,8 @@ Each signed version `1.0` chunk contains:
 - `chunkId` for idempotency;
 - `streamId` for the continuous import/dataset identity;
 - `entity.id` plus the proposed normalized entity and column schema;
+- optional bounded `categoricalValues` for string columns whose exact domain is
+  known by the producer;
 - bounded `sourceId`, `sequence`, and `producedAt` metadata;
 - between 1 and 5,000 stream records.
 
@@ -17,6 +19,10 @@ resolve the entity. If the UUID already exists, Java returns its registered
 structure and rejects structural drift. If it does not exist, Java
 transactionally creates one `business_entity` and its normalized immutable
 `entity_column` records using the configured ingestion-system identity.
+Categorical vocabulary is stored separately as normalized column metadata and
+may grow only within the governed 32-value bound. It is supplied to planning so
+business terms can be resolved to exact stored values; unmatched values are
+rejected before execution rather than silently producing an empty result.
 Python then enforces exact column
 order and registered Spark types,
 and writes each chunk as an immutable Parquet part under:

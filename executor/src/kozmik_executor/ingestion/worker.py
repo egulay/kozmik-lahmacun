@@ -90,7 +90,8 @@ class SchemaClient:
             ]
             if supplied != registered:
                 raise ValueError("SCHEMA_MISMATCH")
-            return existing
+            return await self.update_categorical_vocabulary(
+                descriptor.id, descriptor.columns)
         except ValueError as exception:
             if str(exception) != "UNKNOWN_ENTITY":
                 raise
@@ -98,6 +99,7 @@ class SchemaClient:
             IngestionColumn(
                 columnName=item.column_name,
                 dataType=item.data_type,
+                categoricalValues=item.categorical_values,
             )
             for item in descriptor.columns
         ]
@@ -110,6 +112,28 @@ class SchemaClient:
     ) -> IngestionSchema:
         enriched = await MetadataEnricher().enrich(entity_id, source_name, columns)
         return await self.register(enriched)
+
+    async def update_categorical_vocabulary(
+        self, entity_id: UUID, columns,
+    ) -> IngestionSchema:
+        vocabulary = [
+            {
+                "columnName": item.column_name,
+                "values": item.categorical_values,
+            }
+            for item in columns
+            if item.categorical_values
+        ]
+        if not vocabulary:
+            return await self.load(entity_id)
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.put(
+                f"{self.base_url}/internal/v1/entities/{entity_id}/categorical-vocabulary",
+                headers={"X-Internal-API-Key": self.api_key},
+                json={"columns": vocabulary},
+            )
+        response.raise_for_status()
+        return self._project_ingestion_schema(response.json())
 
     async def register(self, descriptor) -> IngestionSchema:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -191,9 +215,26 @@ class SparkCsvIngester:
                          if isinstance(field.dataType, spark_type)),
                         "STRING",
                     ),
+                    categoricalValues=self._categorical_values(frame, field),
                 )
                 for field in frame.schema.fields
             ]
+
+    @staticmethod
+    def _categorical_values(frame, field) -> list[str]:
+        if not isinstance(field.dataType, spark_types.StringType):
+            return []
+        normalized_name = field.name.lower()
+        if normalized_name == "id" or normalized_name.endswith("_id"):
+            return []
+        values = [
+            str(row[0]) for row in
+            frame.select(spark_fn.trim(spark_fn.col(field.name)))
+            .where(spark_fn.col(field.name).isNotNull())
+            .distinct().limit(33).collect()
+            if row[0] is not None and str(row[0]).strip()
+        ]
+        return sorted(values) if len(values) <= 32 else []
 
     def _ingest(
         self, import_id: UUID, bucket: str, key: str, schema: IngestionSchema,
@@ -242,12 +283,31 @@ class IngestionProcessor:
         try:
             await self._event(import_id, source_event_id, entity_id, key, correlation,
                               "RECEIVED", "RECEIVED", "IMPORT_RECEIVED")
+            structure = await self.ingester.discover(bucket, key)
             try:
                 schema = await self.schema_client.load(entity_id)
+                registered = [
+                    item.column_name for item in schema.columns
+                ]
+                supplied = [
+                    item.column_name for item in structure
+                ]
+                if registered != supplied:
+                    raise ValueError("SCHEMA_MISMATCH")
+                discovered_by_name = {item.column_name: item for item in structure}
+                vocabulary = [IngestionColumn(
+                    columnName=item.column_name,
+                    dataType=item.data_type,
+                    categoricalValues=(
+                        discovered_by_name[item.column_name].categorical_values
+                        if item.data_type == "STRING" else []
+                    ),
+                ) for item in schema.columns]
+                schema = await self.schema_client.update_categorical_vocabulary(
+                    entity_id, vocabulary)
             except ValueError as exception:
                 if str(exception) != "UNKNOWN_ENTITY":
                     raise
-                structure = await self.ingester.discover(bucket, key)
                 source_name = Path(key).name.rsplit(f"_{entity_id}_", 1)[0]
                 schema = await self.schema_client.register_structure(
                     entity_id, source_name, structure)

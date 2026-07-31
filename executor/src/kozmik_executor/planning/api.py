@@ -32,6 +32,16 @@ def _authenticate(value: str | None) -> None:
         raise HTTPException(status_code=401, detail="internal authentication required")
 
 
+def _enforce_preview_limit(raw: object, max_preview_rows: int) -> None:
+    """Keep the browser-preview policy under control-plane ownership."""
+    if not isinstance(raw, dict):
+        return
+    constraints = raw.get("constraints")
+    if not isinstance(constraints, dict):
+        return
+    constraints["maxPreviewRows"] = max(1, min(max_preview_rows, 100))
+
+
 def _report_issues(exception: ValidationError | PlanningValidationError) -> list[dict]:
     if isinstance(exception, ValidationError):
         return [
@@ -45,16 +55,21 @@ def _report_issues(exception: ValidationError | PlanningValidationError) -> list
     return [issue.model_dump(by_alias=True) for issue in exception.issues]
 
 
-async def _generate_report_order(provider, request: ReportPlanningRequest) -> ReportOrder:
+async def _generate_report_order(
+    provider, request: ReportPlanningRequest, max_preview_rows: int = 100,
+) -> ReportOrder:
     base_prompt = build_prompt(request)
     prompt = base_prompt
     last_exception: ValidationError | PlanningValidationError | None = None
     for attempt in range(3):
         raw = await provider.complete_json(SYSTEM_PROMPT, prompt)
         try:
+            _enforce_preview_limit(raw, max_preview_rows)
             _normalize_between_filters(raw)
             _normalize_explicit_temporal_grouping(raw)
             _normalize_implicit_temporal_grouping(raw, request)
+            _normalize_temporal_labels(raw, request.requested_language)
+            _normalize_group_by_aliases(raw)
             order = ReportOrder.model_validate(raw)
             validate_order(order, request)
             return order
@@ -168,7 +183,8 @@ def _normalize_explicit_temporal_grouping(raw: object) -> None:
         if temporal.get("displayLabel"):
             source_selections[0]["displayLabel"] = temporal["displayLabel"]
         payload["groupBy"] = [
-            value for value in payload["groupBy"] if value != source
+            value for value in payload["groupBy"]
+            if value != source and value != alias
         ]
 
 
@@ -255,7 +271,72 @@ def _normalize_implicit_temporal_grouping(
     )
 
 
-async def _generate_ml_order(provider, request: ReportPlanningRequest) -> MlOrder:
+def _normalize_temporal_labels(raw: object, language: str) -> None:
+    """Label derived calendar buckets rather than their source timestamp columns."""
+    if not isinstance(raw, dict):
+        return
+    payload = raw.get("payload")
+    if not isinstance(payload, dict):
+        return
+    temporal_groups = payload.get("temporalGroupBy")
+    selected = payload.get("select")
+    if not isinstance(temporal_groups, list) or not isinstance(selected, list):
+        return
+
+    turkish_labels = {
+        "DAY": "Gün",
+        "WEEK": "Hafta",
+        "MONTH": "Ay",
+        "QUARTER": "Çeyrek",
+        "YEAR": "Yıl",
+    }
+    for temporal in temporal_groups:
+        if not isinstance(temporal, dict):
+            continue
+        alias = temporal.get("alias")
+        granularity = temporal.get("granularity")
+        if not isinstance(alias, str) or not isinstance(granularity, str):
+            continue
+        label = (
+            turkish_labels.get(granularity.upper(), alias.replace("_", " ").title())
+            if language.lower().startswith("tr")
+            else alias.replace("_", " ").title()
+        )
+        temporal["displayLabel"] = label
+        for item in selected:
+            if isinstance(item, dict) and item.get("alias") == alias:
+                item["displayLabel"] = label
+
+
+def _normalize_group_by_aliases(raw: object) -> None:
+    """Resolve selected presentation aliases back to governed source columns."""
+    if not isinstance(raw, dict):
+        return
+    payload = raw.get("payload")
+    if not isinstance(payload, dict):
+        return
+    selected = payload.get("select")
+    group_by = payload.get("groupBy")
+    if not isinstance(selected, list) or not isinstance(group_by, list):
+        return
+    aliases = {
+        item["alias"]: item["column"]
+        for item in selected
+        if isinstance(item, dict)
+        and isinstance(item.get("alias"), str)
+        and isinstance(item.get("column"), str)
+    }
+    normalized: list[object] = []
+    for value in group_by:
+        resolved = aliases.get(value, value)
+        if resolved not in normalized:
+            normalized.append(resolved)
+    payload["groupBy"] = normalized
+
+
+async def _generate_ml_order(
+    provider, request: ReportPlanningRequest, max_preview_rows: int = 100,
+) -> MlOrder:
     registry = {
         f"{problem_type}:{algorithm}": {
             "parameters": {
@@ -278,7 +359,10 @@ async def _generate_ml_order(provider, request: ReportPlanningRequest) -> MlOrde
     for attempt in range(3):
         raw = await provider.complete_json(ML_SYSTEM_PROMPT, prompt)
         try:
+            _enforce_preview_limit(raw, max_preview_rows)
+            _remove_unrequested_what_if(raw, request.user_request)
             _remove_implicit_what_if_baseline(raw)
+            _normalize_ml_features(raw, request)
             order = MlOrder.model_validate(raw)
             columns = {
                 column.column_name: column
@@ -368,6 +452,43 @@ def _requires_what_if(user_request: str) -> bool:
     ))
 
 
+def _remove_unrequested_what_if(raw: object, user_request: str) -> None:
+    """Keep scenario analysis opt-in rather than accepting an LLM invention."""
+    if _requires_what_if(user_request) or not isinstance(raw, dict):
+        return
+    payload = raw.get("payload")
+    if isinstance(payload, dict):
+        payload.pop("whatIfAnalysis", None)
+
+
+def _normalize_ml_features(raw: object, request: ReportPlanningRequest) -> None:
+    """Drop unsupported or duplicate features without relaxing governed validation."""
+    if not isinstance(raw, dict):
+        return
+    payload = raw.get("payload")
+    if not isinstance(payload, dict):
+        return
+    features = payload.get("featureColumns")
+    target = payload.get("targetColumn")
+    if not isinstance(features, list):
+        return
+    supported = {
+        column.column_name
+        for column in request.authorized_schema.columns
+        if column.data_type.value in {"INTEGER", "LONG", "DECIMAL", "STRING"}
+    }
+    normalized: list[str] = []
+    for value in features:
+        if (
+            isinstance(value, str)
+            and value in supported
+            and value != target
+            and value not in normalized
+        ):
+            normalized.append(value)
+    payload["featureColumns"] = normalized
+
+
 def _remove_implicit_what_if_baseline(raw: object) -> None:
     """Remove only an LLM-emitted baseline that Spark calculates automatically."""
     if not isinstance(raw, dict):
@@ -418,7 +539,8 @@ async def plan_report(
     try:
         effective = await configuration_client.load()
         provider = provider_registry.resolve(effective.llm)
-        order = await _generate_report_order(provider, request)
+        max_preview_rows = int((effective.execution or {}).get("maxPreviewRows", 100))
+        order = await _generate_report_order(provider, request, max_preview_rows)
         return ReportPlanningResponse(
             request_id=request.request_id, correlation_id=request.correlation_id,
             provider=provider.name, model=provider.model, order=order,
@@ -452,7 +574,8 @@ async def plan_ml(
     try:
         effective = await configuration_client.load()
         provider = provider_registry.resolve(effective.llm)
-        order = await _generate_ml_order(provider, request)
+        max_preview_rows = int((effective.execution or {}).get("maxPreviewRows", 100))
+        order = await _generate_ml_order(provider, request, max_preview_rows)
         return MlPlanningResponse(
             request_id=request.request_id, correlation_id=request.correlation_id,
             provider=provider.name, model=provider.model, order=order)

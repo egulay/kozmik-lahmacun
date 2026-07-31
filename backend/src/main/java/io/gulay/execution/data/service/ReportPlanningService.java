@@ -223,6 +223,8 @@ public class ReportPlanningService {
             val item = columns.addObject();
             item.put("columnName", column.columnName()).put("businessName", column.businessName())
                     .put("dataType", column.dataType().name());
+            val values = item.putArray("categoricalValues");
+            column.categoricalValues().forEach(values::add);
         });
         return root;
     }

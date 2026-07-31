@@ -46,11 +46,19 @@ class ApprovedReportBreakdown(ContractModel):
     measures: dict[str, int | float | str | bool | None] = Field(max_length=20)
 
 
+class ApprovedReportHighlight(ContractModel):
+    chart_type: str = Field(max_length=20)
+    category_field: str = Field(max_length=100)
+    leading_category: str = Field(max_length=200)
+    value: int | float
+
+
 class SummaryFacts(ContractModel):
     schema_version: Literal["1.0"] = "1.0"
     execution_type: Literal["REPORT", "ML"]
     language: Literal["tr", "en"]
     row_count: int = Field(ge=0)
+    objective: str | None = Field(default=None, max_length=500)
     algorithm: str | None = Field(default=None, max_length=100)
     target: str | None = Field(default=None, max_length=100)
     features: list[str] = Field(default_factory=list, max_length=20)
@@ -58,6 +66,8 @@ class SummaryFacts(ContractModel):
     scenario_objective: Literal["MAXIMIZE_TARGET", "MINIMIZE_TARGET"] | None = None
     scenarios: list[ApprovedScenario] = Field(default_factory=list, max_length=6)
     report_breakdown: list[ApprovedReportBreakdown] = Field(
+        default_factory=list, max_length=10)
+    report_highlights: list[ApprovedReportHighlight] = Field(
         default_factory=list, max_length=10)
     facts: list[ApprovedFact] = Field(max_length=20)
     warnings: list[ApprovedWarning] = Field(max_length=20)
@@ -109,7 +119,11 @@ class ResultExplainer:
                 "code": item.get("code"), "messageKey": item.get("messageKey"),
             })
             for item in result.get("warnings", [])[:20]
-            if isinstance(item, dict) and isinstance(item.get("code"), str)
+            if (
+                isinstance(item, dict)
+                and isinstance(item.get("code"), str)
+                and item.get("code") != "RESULT_TRUNCATED"
+            )
         ]
         target = None
         features: list[str] = []
@@ -119,12 +133,15 @@ class ResultExplainer:
         drivers = self._approved_drivers(result)
         scenario_objective, scenarios = self._approved_scenarios(result)
         report_breakdown = self._approved_report_breakdown(command, result)
+        report_highlights = self._approved_report_highlights(result)
         facts = SummaryFacts(
             executionType=command.execution_type, language=language,
-            rowCount=result["rowCount"], algorithm=algorithm,
+            rowCount=result["rowCount"], objective=command.order.request_summary[:500],
+            algorithm=algorithm,
             target=target, features=features, drivers=drivers,
             scenarioObjective=scenario_objective, scenarios=scenarios,
             reportBreakdown=report_breakdown,
+            reportHighlights=report_highlights,
             facts=approved_facts, warnings=warnings)
         encoded = facts.model_dump_json(by_alias=True)
         if len(encoded) > self.MAX_FACTS_JSON:
@@ -155,8 +172,10 @@ class ResultExplainer:
                 "conditional recommendation beginning with 'Under the tested assumptions'. "
             )
             execution_instruction = (
-                "For a REPORT, approved facts and reportBreakdown are calculated aggregate "
-                "business results. Use their values to describe the main comparison, range, "
+                "For a REPORT, approved facts, reportBreakdown, and reportHighlights are "
+                "calculated aggregate business results. reportHighlights identifies the "
+                "leading category in each requested chart after remaining grouped dimensions "
+                "have been aggregated. Use their values to describe the main comparison, range, "
                 "ranking, or time pattern in plain language. You may state these approved "
                 "aggregate values. reportBreakdown contains bounded grouped aggregates, not raw "
                 "source rows. Never claim that governed facts are absent when facts or "
@@ -164,14 +183,26 @@ class ResultExplainer:
                 "a directional recommendation or generic what-if discussion. "
                 if facts.execution_type == "REPORT"
                 else
-                "For ML, do not repeat raw metric values, algorithm names, row counts, tuning "
-                "trials, or split details; those are shown elsewhere. Describe reliability "
-                "qualitatively and conservatively. Do not recommend increasing, decreasing, "
+                "For ML, evaluate the supplied performance facts rather than giving a generic "
+                "statement. Translate them into business language: MAE is the average absolute "
+                "difference in target units, RMSE reflects the typical scale when larger misses "
+                "receive more weight, and R2 is the share of observed variation captured. Mention "
+                "one or two rounded values without using metric abbreviations, and never describe "
+                "R2 as probability or confidence. Do not repeat algorithm names, row counts, "
+                "tuning trials, or split details; those are shown elsewhere. Explain a practical "
+                "use that follows from the stated objective and strongest supplied drivers. "
+                "Do not recommend increasing, decreasing, "
                 "raising, reducing, changing, adjusting, maintaining, expanding, or limiting "
                 "any business input unless approved scenario facts directly establish it. "
                 + conditional_recommendation_instruction +
-                "When they do not, say that the result does not establish an increase/decrease "
-                "action and name the controlled what-if analysis needed for such a decision. "
+                "When no scenarios are supplied, do not discuss what-if analysis or directional "
+                "changes; summarize the predictive result that was actually calculated. "
+            )
+            zero_result_instruction = (
+                "The result row count is zero. State clearly that no data matched the request "
+                "and suggest reviewing its filters. Do not describe comparisons, rankings, "
+                "drivers, patterns, performance, or business findings that were not produced. "
+                if facts.row_count == 0 else ""
             )
             messages = [
                 {"role": "system", "content": (
@@ -192,7 +223,7 @@ class ResultExplainer:
                     "Return only the paragraph text. Do not add headings, labels, Markdown, "
                     "'Decision Summary', 'Approved Warnings', or a warnings section. "
                     "Do not infer identifiers, people, customers, raw rows, or unsupported causes. "
-                    + language_instruction)},
+                    + zero_result_instruction + language_instruction)},
                 {"role": "user", "content": json.dumps(
                     facts.model_dump(by_alias=True, mode="json"),
                     separators=(",", ":"), ensure_ascii=False)},
@@ -204,6 +235,8 @@ class ResultExplainer:
                 raise ProviderError("LLM_SUMMARY_EMPTY")
             violations = self._management_violations(text)
             violations.extend(self._grounding_violations(text, facts))
+            violations.extend(self._ml_specificity_violations(text, facts))
+            violations.extend(self._zero_result_violations(text, facts))
             violations.extend(self._warning_duplication_violations(text, facts))
             if violations:
                 repair_messages = [
@@ -211,8 +244,9 @@ class ResultExplainer:
                     {"role": "assistant", "content": text},
                     {"role": "user", "content": (
                         "Rewrite the summary. It violated these output rules: "
-                        f"{', '.join(violations)}. Discuss business meaning only. Do not add "
-                        "facts, uses, recommendations, probabilities, or forecasts.")},
+                        f"{', '.join(violations)}. Discuss business meaning using only the "
+                        "supplied facts. Do not invent recommendations, probabilities, or "
+                        "forecasts.")},
                 ]
                 text = self._clean_management_summary(
                     await self._complete(provider, repair_messages)
@@ -220,6 +254,8 @@ class ResultExplainer:
             remaining_violations = (
                 self._management_violations(text)
                 + self._grounding_violations(text, facts)
+                + self._ml_specificity_violations(text, facts)
+                + self._zero_result_violations(text, facts)
                 + self._warning_duplication_violations(text, facts)
                 if text else ["empty management summary"]
             )
@@ -246,6 +282,8 @@ class ResultExplainer:
             final_violations = (
                 self._management_violations(text)
                 + self._grounding_violations(text, facts)
+                + self._ml_specificity_violations(text, facts)
+                + self._zero_result_violations(text, facts)
                 + self._warning_duplication_violations(text, facts)
                 if text else ["empty management summary"]
             )
@@ -384,6 +422,49 @@ class ResultExplainer:
         ]
 
     @staticmethod
+    def _approved_report_highlights(
+        result: dict[str, Any],
+    ) -> list[ApprovedReportHighlight]:
+        highlights = []
+        for chart in result.get("charts", [])[:10]:
+            if not isinstance(chart, dict):
+                continue
+            categories = chart.get("categories")
+            series = chart.get("series")
+            category_field = chart.get("categoryField")
+            chart_type = chart.get("type")
+            if (
+                not isinstance(categories, list)
+                or not isinstance(series, list)
+                or not isinstance(category_field, str)
+                or not isinstance(chart_type, str)
+            ):
+                continue
+            totals = [0.0 for _ in categories]
+            found = False
+            for item in series:
+                if not isinstance(item, dict) or not isinstance(item.get("data"), list):
+                    continue
+                for index, value in enumerate(item["data"][:len(categories)]):
+                    numeric = ResultExplainer._numeric_value(value)
+                    if numeric is not None:
+                        totals[index] += numeric
+                        found = True
+            if not found or not totals:
+                continue
+            leading_index = max(range(len(totals)), key=totals.__getitem__)
+            category = categories[leading_index]
+            if category is None:
+                continue
+            highlights.append(ApprovedReportHighlight(
+                chartType=chart_type,
+                categoryField=category_field,
+                leadingCategory=str(category),
+                value=totals[leading_index],
+            ))
+        return highlights
+
+    @staticmethod
     async def _complete(provider, messages: list[dict[str, str]]) -> str:
         chunks = []
         length = 0
@@ -420,15 +501,19 @@ class ResultExplainer:
     def _grounding_violations(text: str, facts: SummaryFacts) -> list[str]:
         if (
             facts.execution_type != "REPORT"
-            or not (facts.facts or facts.report_breakdown)
+            or not (facts.facts or facts.report_breakdown or facts.report_highlights)
         ):
             return []
         empty_claim = re.compile(
-            r"\b(?:no|without|absence of|does not contain any|lacks?)\b"
-            r".{0,60}\b(?:facts?|data|metrics?|measures?|values?|results?|drivers?)\b|"
-            r"(?:somut veri sonuçlarını içermez|hiçbir .{0,40}(?:bulunmamaktadır|yoktur)|"
-            r"veri seti boştur?|veri setinin eksik olması|"
-            r"(?:ölçülebilir|nicel|sayısal).{0,30}(?:veri|değer|sonuç).{0,20}(?:yok|eksik))",
+            r"\b(?:does not contain any|contains no|without any|absence of|lacks?)\b"
+            r".{0,35}\b(?:governed facts?|aggregate data|quantitative measures?|"
+            r"calculated values?|report results?)\b|"
+            r"\bwithout (?:specific )?quantitative measures?\b|"
+            r"\blacks? concrete (?:performance )?metrics?\b|"
+            r"\bno approved drivers? or quantitative facts? (?:are|is) provided\b|"
+            r"(?:somut veri sonuçlarını içermez|veri seti boştur?|veri setinin eksik olması|"
+            r"hiçbir (?:yönetilen|hesaplanmış|sayısal|nicel).{0,30}(?:veri|değer|sonuç)"
+            r".{0,20}(?:bulunmamaktadır|yoktur))",
             re.IGNORECASE,
         )
         return ["use the supplied governed report facts"] if empty_claim.search(text) else []
@@ -454,6 +539,40 @@ class ResultExplainer:
         )
 
     @staticmethod
+    def _ml_specificity_violations(
+        text: str, facts: SummaryFacts,
+    ) -> list[str]:
+        if facts.execution_type != "ML":
+            return []
+        performance_codes = {
+            "RMSE", "MAE", "R2", "ACCURACY", "F1", "PRECISION", "RECALL", "AUC",
+        }
+        has_performance_values = any(
+            fact.code in performance_codes
+            and ResultExplainer._numeric_value(fact.value) is not None
+            for fact in facts.facts
+        )
+        return (
+            ["include a rounded, plain-language interpretation of measured performance"]
+            if has_performance_values and not re.search(r"\d", text)
+            else []
+        )
+
+    @staticmethod
+    def _zero_result_violations(text: str, facts: SummaryFacts) -> list[str]:
+        if facts.row_count != 0:
+            return []
+        no_data = re.compile(
+            r"\b(?:no (?:matching )?data|returned no data|zero rows|no results?)\b|"
+            r"(?:eşleşen veri bulunamadı|veri döndürmedi|sonuç bulunamadı|sıfır satır)",
+            re.IGNORECASE,
+        )
+        return (
+            ["state that no data matched and do not describe nonexistent findings"]
+            if not no_data.search(text) else []
+        )
+
+    @staticmethod
     def _numeric_value(value: Any) -> float | None:
         if isinstance(value, bool) or value is None:
             return None
@@ -472,7 +591,34 @@ class ResultExplainer:
 
     @staticmethod
     def _grounded_management_fallback(facts: SummaryFacts) -> str:
+        if facts.row_count == 0:
+            return (
+                "Bu istekle eşleşen veri bulunamadı. Filtreleri veya istek kapsamını "
+                "gözden geçirip yeniden deneyin. Karşılaştırılacak bir sonuç oluşmadı."
+                if facts.language == "tr"
+                else
+                "No data matched this request. Review its filters or scope and try again. "
+                "No comparison or business finding was produced."
+            )
         if facts.execution_type == "REPORT":
+            if facts.report_highlights:
+                rendered = "; ".join(
+                    f"{item.category_field.replace('_', ' ')}: "
+                    f"{item.leading_category} "
+                    f"({ResultExplainer._display_number(item.value, facts.language)})"
+                    for item in facts.report_highlights[:3]
+                )
+                if facts.language == "tr":
+                    return (
+                        f"İstenen karşılaştırmada öne çıkan sonuçlar: {rendered}. "
+                        "Bu toplu görünüm, en yoğun dönemleri ve grupları aynı ölçüte göre "
+                        "karşılaştırmak için kullanılabilir."
+                    )
+                return (
+                    f"The leading results in the requested comparisons are {rendered}. "
+                    "This aggregate view can be used to compare the busiest periods and "
+                    "groups using the same measure."
+                )
             breakdown = [
                 item for item in facts.report_breakdown if item.measures
             ]
@@ -582,19 +728,50 @@ class ResultExplainer:
             item.feature.replace("_", " ").strip()
             for item in facts.drivers[:3]
         ]
-        r2 = next(
+        target = (facts.target or "requested outcome").replace("_", " ")
+        mae = next(
             (
-                float(item.value)
-                for item in facts.facts
-                if item.code == "R2" and isinstance(item.value, (int, float))
+                ResultExplainer._numeric_value(item.value)
+                for item in facts.facts if item.code == "MAE"
             ),
             None,
         )
-        reliability = (
-            "very consistently" if r2 is not None and r2 >= 0.95
-            else "consistently" if r2 is not None and r2 >= 0.8
-            else "with some uncertainty"
+        rmse = next(
+            (
+                ResultExplainer._numeric_value(item.value)
+                for item in facts.facts if item.code == "RMSE"
+            ),
+            None,
         )
+        r2 = next(
+            (
+                ResultExplainer._numeric_value(item.value)
+                for item in facts.facts if item.code == "R2"
+            ),
+            None,
+        )
+        performance = []
+        if mae is not None:
+            performance.append(
+                f"ortalama mutlak tahmin farkı {ResultExplainer._display_number(mae, 'tr')}"
+                if facts.language == "tr"
+                else f"average absolute prediction difference is "
+                f"{ResultExplainer._display_number(mae, 'en')}"
+            )
+        if rmse is not None:
+            performance.append(
+                f"büyük sapmalara daha duyarlı fark {ResultExplainer._display_number(rmse, 'tr')}"
+                if facts.language == "tr"
+                else f"the larger-error-sensitive difference is "
+                f"{ResultExplainer._display_number(rmse, 'en')}"
+            )
+        if r2 is not None:
+            captured = ResultExplainer._display_number(r2 * 100, facts.language)
+            performance.append(
+                f"gözlenen değişimin %{captured} kadarı yakalanıyor"
+                if facts.language == "tr"
+                else f"{captured}% of observed variation is captured"
+            )
         if facts.language == "tr":
             driver_text = (
                 f"Sonucu en çok {', '.join(drivers[:2])}"
@@ -603,12 +780,9 @@ class ResultExplainer:
                 if drivers else ""
             )
             return (
-                f"Mevcut sipariş bilgileriyle beklenen net satış tutarı {reliability.replace('very consistently', 'oldukça tutarlı').replace('consistently', 'tutarlı').replace('with some uncertainty', 'belirli bir belirsizlikle')} tahmin edilebilir. "
-                f"{driver_text} Bu sonuç, planlanan siparişleri karşılaştırmak ve ayrıca incelenmesi "
-                "gereken tahminleri belirlemek için kullanılabilir. Talebi, satış büyümesini veya "
-                "bir politika değişikliğinin etkisini öngörmez; mevcut verideki ilişkileri yansıtır. "
-                "Artırma veya azaltma kararı için ilgili girdileri kontrollü biçimde değiştiren "
-                "bir senaryo analizi gerekir."
+                f"{target} tahmini tamamlandı: {'; '.join(performance)}. "
+                f"{driver_text} Sonuç, beklenen değerleri karşılaştırmak ve olağandışı sapmaları "
+                "incelemek için kullanılabilir."
             ).strip()
         driver_text = (
             f"The strongest influences are {', '.join(drivers[:2])}"
@@ -617,10 +791,7 @@ class ResultExplainer:
             if drivers else ""
         )
         return (
-            f"Expected net sales can be estimated {reliability} from the available order "
-            f"information. {driver_text} This can support comparison of planned orders and help "
-            "identify estimates that deserve review. It does not predict demand, sales growth, "
-            "or the effect of changing business policy; it reflects relationships in the "
-            "available historical data. An increase or decrease decision requires a governed "
-            "what-if analysis that changes the relevant inputs under controlled assumptions."
+            f"The {target} prediction is complete: {'; '.join(performance)}. "
+            f"{driver_text} The result can be used to compare expected values and identify "
+            "unusual differences that deserve review."
         ).strip()

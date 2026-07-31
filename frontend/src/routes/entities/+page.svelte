@@ -10,12 +10,15 @@
   import StatusBadge from '$lib/components/StatusBadge.svelte';
   import { DurableEventStream } from '$lib/sse';
   import ServerPagination from '$lib/components/ServerPagination.svelte';
+  import { openWorkspaceTab } from '$lib/workspace-tabs';
 
   let entities = $state<EntitySummary[]>([]);
   let loading = $state(true);
   let error = $state('');
   let stream: DurableEventStream | undefined;
   let reloadTimer: ReturnType<typeof setTimeout> | undefined;
+  const completionTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  let activeStreamEntities = $state<Record<string, boolean>>({});
   let pageNumber = $state(0);
   let pageSize = $state(20);
   let totalElements = $state(0);
@@ -23,10 +26,17 @@
   let registeredStructureCount = $state(0);
 
   onMount(() => {
+    openWorkspaceTab({
+      pageId: 'entities',
+      title: $t('entities'),
+      tabType: 'page'
+    });
     void load().then(connect);
     return () => {
       stream?.close();
       if (reloadTimer) clearTimeout(reloadTimer);
+      for (const timer of completionTimers.values()) clearTimeout(timer);
+      completionTimers.clear();
     };
   });
 
@@ -34,7 +44,11 @@
     if (showLoading) loading = true;
     try {
       const response = await api.entityPage(targetPage, pageSize);
-      entities = response.items;
+      entities = response.items.map((entity) =>
+        activeStreamEntities[entity.id]
+          ? { ...entity, latestImportStatus: 'INGESTING' }
+          : entity
+      );
       pageNumber = response.page;
       totalElements = response.totalElements;
       totalPages = response.totalPages;
@@ -53,15 +67,45 @@
   function connect() {
     stream = new DurableEventStream('/api/entities/ingestion-stream', {
       onReconnect: () => load(false),
-      onEvent: (_event, name) => {
-        if (name !== 'entity-ingestion-changed' || reloadTimer) return;
-        reloadTimer = setTimeout(() => {
-          reloadTimer = undefined;
-          void load(false);
-        }, 1_000);
+      onEvent: (event, name) => {
+        if (name !== 'entity-ingestion-changed') return;
+        let payload: Record<string, unknown>;
+        try { payload = JSON.parse(event.data); } catch { return; }
+        const entityId = typeof payload.entityId === 'string' ? payload.entityId : '';
+        if (entityId && payload.ingestionKind === 'STREAM') {
+          holdStreamActivity(entityId);
+        }
+        scheduleReload();
       }
     });
     stream.connect();
+  }
+
+  function holdStreamActivity(entityId: string) {
+    activeStreamEntities = { ...activeStreamEntities, [entityId]: true };
+    entities = entities.map((entity) =>
+      entity.id === entityId
+        ? { ...entity, latestImportStatus: 'INGESTING' }
+        : entity
+    );
+
+    const existing = completionTimers.get(entityId);
+    if (existing) clearTimeout(existing);
+    completionTimers.set(entityId, setTimeout(() => {
+      completionTimers.delete(entityId);
+      const next = { ...activeStreamEntities };
+      delete next[entityId];
+      activeStreamEntities = next;
+      void load(false);
+    }, 10_000));
+  }
+
+  function scheduleReload() {
+    if (reloadTimer) return;
+    reloadTimer = setTimeout(() => {
+      reloadTimer = undefined;
+      void load(false);
+    }, 1_000);
   }
 </script>
 

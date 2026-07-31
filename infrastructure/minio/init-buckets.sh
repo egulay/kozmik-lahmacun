@@ -20,7 +20,7 @@ attach_policy_if_needed() {
   esac
 }
 
-for bucket in raw refined reports models results; do
+for bucket in raw refined models results; do
   mc mb --ignore-existing "local/${bucket}"
 done
 

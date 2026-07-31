@@ -7,6 +7,6 @@ public record CurrentUserResponseDto(
         String username,
         String displayName,
         String email,
-        Set<String> roles) {
+        Set<String> roles,
+        String workspaceGeneration) {
 }
-

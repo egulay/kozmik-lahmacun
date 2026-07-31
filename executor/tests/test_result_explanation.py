@@ -157,7 +157,7 @@ def test_summary_prompt_excludes_raw_preview_rows_and_unapproved_fields():
     assert outcome.status == "COMPLETED"
     prompt = provider.messages[1]["content"]
     assert "TOTAL_REVENUE" in prompt
-    assert "RESULT_TRUNCATED" in prompt
+    assert "RESULT_TRUNCATED" not in prompt
     assert "SECRET-CUSTOMER-42" not in prompt
     assert "SECRET-ROW" not in prompt
     assert '"preview"' not in prompt
@@ -168,6 +168,16 @@ def test_summary_prompt_excludes_raw_preview_rows_and_unapproved_fields():
     assert "bounded grouped aggregates, not raw source rows" in system_prompt
     assert "Never convert R2" in system_prompt
     assert "without adding a directional recommendation" in system_prompt
+
+
+def test_long_execution_objective_is_bounded_before_summary_validation():
+    execution = command().model_copy(deep=True)
+    execution.order.request_summary = "Compare sales performance. " * 40
+
+    facts = ResultExplainer().build_facts(execution, result())
+
+    assert facts.objective is not None
+    assert len(facts.objective) == 500
 
 
 def test_turkish_instruction_and_provider_failure_are_nonfatal():
@@ -305,6 +315,26 @@ def test_decimal_string_aggregates_cannot_be_described_as_missing():
     assert provider.calls == 3
 
 
+def test_report_highlights_are_bounded_aggregates_and_allow_absence_of_anomaly_wording():
+    result_document = result()
+    result_document["charts"] = [{
+        "chartId": "chart-1", "type": "LINE", "categoryField": "call_month",
+        "categories": ["2026-01", "2026-02"],
+        "series": [
+            {"name": "VOICE", "data": [30, 40]},
+            {"name": "SMS", "data": [10, 5]},
+        ],
+    }]
+
+    facts = ResultExplainer().build_facts(grouped_report_command(), result_document)
+
+    assert facts.report_highlights[0].leading_category == "2026-02"
+    assert facts.report_highlights[0].value == 45
+    assert ResultExplainer._grounding_violations(
+        "February was busiest, and no unusual duration pattern was identified.", facts,
+    ) == []
+
+
 def test_grounded_summary_recommends_only_calculated_best_scenario():
     facts = SummaryFacts.model_validate({
         "executionType": "ML", "language": "en", "rowCount": 100,
@@ -329,3 +359,46 @@ def test_grounded_summary_recommends_only_calculated_best_scenario():
     assert "limited, controlled business test" in summary
     assert "demand, cost, profit" not in summary
     assert "competitor reactions" not in summary
+
+
+def test_ml_summary_requires_concrete_performance_interpretation_without_what_if():
+    facts = SummaryFacts.model_validate({
+        "executionType": "ML", "language": "en", "rowCount": 149980,
+        "objective": "Estimate expected call charge",
+        "algorithm": "XGBOOST_REGRESSOR", "target": "charge_amount",
+        "features": ["duration_seconds", "call_type"],
+        "drivers": [
+            {"feature": "duration_seconds", "importance": 349},
+            {"feature": "call_type: VOICE", "importance": 1},
+        ],
+        "facts": [
+            {"code": "RMSE", "value": 0.562293},
+            {"code": "MAE", "value": 0.25142},
+            {"code": "R2", "value": 0.993938},
+        ],
+        "warnings": [],
+    })
+    generic = (
+        "The model demonstrates high reliability and can support business decisions. "
+        "Call duration is the strongest influence."
+    )
+
+    assert ResultExplainer._ml_specificity_violations(generic, facts)
+    grounded = ResultExplainer._grounded_management_fallback(facts)
+    assert "0.25" in grounded
+    assert "99.39% of observed variation" in grounded
+    assert "duration seconds" in grounded
+    assert "what-if" not in grounded.lower()
+
+
+def test_zero_row_result_rejects_invented_comparison_and_guides_no_data_summary():
+    facts = SummaryFacts.model_validate({
+        "executionType": "REPORT", "language": "en", "rowCount": 0,
+        "objective": "Compare sales by category", "facts": [], "warnings": [],
+    })
+    invented = "The breakdown provides a clear comparison across product categories."
+
+    assert ResultExplainer._zero_result_violations(invented, facts)
+    grounded = ResultExplainer._grounded_management_fallback(facts)
+    assert "No data matched this request" in grounded
+    assert ResultExplainer._zero_result_violations(grounded, facts) == []

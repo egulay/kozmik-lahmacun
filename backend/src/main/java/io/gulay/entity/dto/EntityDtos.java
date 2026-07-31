@@ -53,12 +53,32 @@ public final class EntityDtos {
             @Size(max = 4000) String description,
             @Positive int ordinalPosition,
             @Size(max = 200) String businessNameTr,
-            @Size(max = 4000) String descriptionTr) {
+            @Size(max = 4000) String descriptionTr,
+            @Size(max = 32) List<@NotBlank @Size(max = 500) String> categoricalValues) {
         public ColumnDefinition(
                 UUID id, String columnName, String businessName, ColumnDataType dataType,
                 String description, int ordinalPosition) {
-            this(id, columnName, businessName, dataType, description, ordinalPosition, null, null);
+            this(id, columnName, businessName, dataType, description, ordinalPosition,
+                    null, null, List.of());
         }
+
+        public ColumnDefinition(
+                UUID id, String columnName, String businessName, ColumnDataType dataType,
+                String description, int ordinalPosition, String businessNameTr,
+                String descriptionTr) {
+            this(id, columnName, businessName, dataType, description, ordinalPosition,
+                    businessNameTr, descriptionTr, List.of());
+        }
+    }
+
+    public record CategoricalVocabularyUpdate(
+            @Size(max = 500) List<@Valid ColumnVocabulary> columns) {
+    }
+
+    public record ColumnVocabulary(
+            @NotBlank @Pattern(regexp = "[A-Za-z_][A-Za-z0-9_]*") @Size(max = 160)
+            String columnName,
+            @Size(max = 32) List<@NotBlank @Size(max = 500) String> values) {
     }
 
     public record EntitySchemaResponse(

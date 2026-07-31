@@ -10,6 +10,7 @@ from kozmik_executor.chat.models import ContractModel
 class IngestionColumn(ContractModel):
     column_name: str
     data_type: Literal["STRING", "INTEGER", "LONG", "DECIMAL", "BOOLEAN", "DATE", "TIMESTAMP"]
+    categorical_values: list[str] = Field(default_factory=list, max_length=32)
 
 
 class IngestionSchema(ContractModel):
@@ -50,6 +51,7 @@ class StreamEntityColumn(ContractModel):
     ordinal_position: int = Field(ge=1)
     business_name_tr: str | None = Field(default=None, max_length=200)
     description_tr: str | None = Field(default=None, max_length=4000)
+    categorical_values: list[str] = Field(default_factory=list, max_length=32)
 
 
 class StreamEntityDescriptor(ContractModel):

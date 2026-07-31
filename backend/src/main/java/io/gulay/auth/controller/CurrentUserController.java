@@ -3,6 +3,7 @@ package io.gulay.auth.controller;
 import lombok.val;
 
 import io.gulay.auth.dto.CurrentUserResponseDto;
+import io.gulay.auth.data.service.WorkspaceGenerationService;
 import io.gulay.security.PlatformRole;
 
 import java.util.Set;
@@ -14,10 +15,13 @@ import org.springframework.security.oauth2.core.oidc.user.OidcUser;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import lombok.RequiredArgsConstructor;
 
 @RestController
 @RequestMapping("/api/auth")
+@RequiredArgsConstructor
 public class CurrentUserController {
+    private final WorkspaceGenerationService workspaceGenerationService;
 
     @GetMapping("/me")
     public CurrentUserResponseDto currentUser(@AuthenticationPrincipal OidcUser user) {
@@ -35,7 +39,8 @@ public class CurrentUserController {
                 user.getPreferredUsername(),
                 user.getFullName(),
                 user.getEmail(),
-                assignedPlatformRoles(roles));
+                assignedPlatformRoles(roles),
+                workspaceGenerationService.current());
     }
 
     /*

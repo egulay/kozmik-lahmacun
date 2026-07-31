@@ -8,7 +8,8 @@ function user(roles: CurrentUser['roles']): CurrentUser {
     username: 'demo',
     displayName: 'Demo Admin',
     email: 'demo@example.test',
-    roles
+    roles,
+    workspaceGeneration: 'test-generation'
   };
 }
 

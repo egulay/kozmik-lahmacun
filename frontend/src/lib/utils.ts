@@ -18,17 +18,27 @@ export function formatDuration(
 	locale = "en-US",
 ) {
 	if (!start) return "—";
-	const milliseconds = new Date(end ?? Date.now()).getTime() - new Date(start).getTime();
-	const formatUnit = (value: number, unit: "millisecond" | "second" | "minute") =>
+	const milliseconds = Math.max(
+		0,
+		new Date(end ?? Date.now()).getTime() - new Date(start).getTime(),
+	);
+	const totalSeconds = Math.floor(milliseconds / 1_000);
+	const formatUnit = (value: number, unit: "second" | "minute" | "hour") =>
 		new Intl.NumberFormat(locale, {
 			style: "unit",
 			unit,
 			unitDisplay: "short",
 			maximumFractionDigits: 0,
 		}).format(value);
-	if (milliseconds < 1_000) return formatUnit(Math.max(0, milliseconds), "millisecond");
-	if (milliseconds < 60_000) return formatUnit(Math.round(milliseconds / 1_000), "second");
-	return formatUnit(Math.round(milliseconds / 60_000), "minute");
+	if (totalSeconds < 60) return formatUnit(totalSeconds, "second");
+	const hours = Math.floor(totalSeconds / 3_600);
+	const minutes = Math.floor((totalSeconds % 3_600) / 60);
+	const seconds = totalSeconds % 60;
+	return [
+		hours ? formatUnit(hours, "hour") : "",
+		hours || minutes ? formatUnit(minutes, "minute") : "",
+		formatUnit(seconds, "second"),
+	].filter(Boolean).join(" ");
 }
 
 export function humanizeField(value: string, locale = "en-US") {

@@ -7,9 +7,11 @@ import io.gulay.api.ForbiddenOperationException;
 import io.gulay.api.ResourceNotFoundException;
 import io.gulay.entity.data.model.BusinessEntityModel;
 import io.gulay.entity.data.model.EntityColumnModel;
+import io.gulay.entity.data.model.EntityColumnCategoryValueModel;
 import io.gulay.entity.data.model.EntityStatus;
 import io.gulay.entity.data.repository.BusinessEntityRepository;
 import io.gulay.entity.data.repository.EntityColumnRepository;
+import io.gulay.entity.data.repository.EntityColumnCategoryValueRepository;
 import io.gulay.entity.dto.EntityDtos;
 import io.gulay.entity.dto.EntityDtos.ColumnDefinition;
 import io.gulay.ingestion.data.repository.ImportJobRepository;
@@ -45,6 +47,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class EntityManagementService {
     private final BusinessEntityRepository entityRepository;
     private final EntityColumnRepository columnRepository;
+    private final EntityColumnCategoryValueRepository categoryValueRepository;
     private final ImportJobRepository importJobRepository;
     private final IngestionStreamRepository ingestionStreamRepository;
     private final IngestionStreamBatchRepository ingestionStreamBatchRepository;
@@ -182,8 +185,7 @@ public class EntityManagementService {
                         "Entity UUID is already registered with a different structure");
             }
             if (!columnRepository.existsByEntityId(entity.getId())) {
-                descriptor.columns().forEach(column ->
-                        columnRepository.save(toColumn(entity, column)));
+                descriptor.columns().forEach(column -> saveColumn(entity, column));
                 localize(entity, descriptor);
                 return schema(entity);
             }
@@ -192,6 +194,7 @@ public class EntityManagementService {
                         "Entity UUID is already registered with a different structure");
             }
             localize(entity, descriptor);
+            mergeCategoricalValues(entity, descriptor.columns());
             return schema(entity);
         }
         if (entityRepository.existsByNameIgnoreCase(descriptor.name())) {
@@ -205,8 +208,34 @@ public class EntityManagementService {
                 .nameTr(descriptor.nameTr()).descriptionTr(descriptor.descriptionTr())
                 .status(EntityStatus.ACTIVE)
                 .createdBy(actor).createdAt(now).updatedAt(now).build());
-        descriptor.columns().forEach(column ->
-                columnRepository.save(toColumn(entity, column)));
+        descriptor.columns().forEach(column -> saveColumn(entity, column));
+        return schema(entity);
+    }
+
+    @Transactional
+    public EntityDtos.EntitySchemaResponse updateCategoricalVocabulary(
+            UUID entityId, EntityDtos.CategoricalVocabularyUpdate request) {
+        val entity = activeEntity(entityId);
+        val supplied = request.columns().stream().collect(java.util.stream.Collectors.toMap(
+                EntityDtos.ColumnVocabulary::columnName,
+                EntityDtos.ColumnVocabulary::values,
+                (left, right) -> right));
+        val columns = columnRepository.findByEntityIdOrderByOrdinalPosition(entityId);
+        val registeredNames = columns.stream().map(EntityColumnModel::getColumnName)
+                .collect(java.util.stream.Collectors.toSet());
+        if (!registeredNames.containsAll(supplied.keySet())) {
+            throw new ConflictException("Categorical vocabulary references an unknown column");
+        }
+        for (val column : columns) {
+            val values = supplied.get(column.getColumnName());
+            if (values != null) {
+                if (column.getDataType() != io.gulay.entity.data.model.ColumnDataType.STRING) {
+                    throw new ConflictException(
+                            "Categorical vocabulary requires a STRING column");
+                }
+                mergeCategoricalValues(column, values);
+            }
+        }
         return schema(entity);
     }
 
@@ -320,6 +349,40 @@ public class EntityManagementService {
                 .ordinalPosition(column.ordinalPosition()).build();
     }
 
+    private void saveColumn(BusinessEntityModel entity, ColumnDefinition definition) {
+        val column = columnRepository.save(toColumn(entity, definition));
+        mergeCategoricalValues(column, definition.categoricalValues());
+    }
+
+    private void mergeCategoricalValues(
+            BusinessEntityModel entity, List<ColumnDefinition> definitions) {
+        val supplied = definitions.stream().collect(java.util.stream.Collectors.toMap(
+                ColumnDefinition::columnName, ColumnDefinition::categoricalValues));
+        columnRepository.findByEntityIdOrderByOrdinalPosition(entity.getId()).forEach(column ->
+                mergeCategoricalValues(column, supplied.getOrDefault(
+                        column.getColumnName(), List.of())));
+    }
+
+    private void mergeCategoricalValues(EntityColumnModel column, List<String> supplied) {
+        if (column.getDataType() != io.gulay.entity.data.model.ColumnDataType.STRING
+                || supplied == null || supplied.isEmpty()) return;
+        val normalized = supplied.stream().map(String::trim).filter(value -> !value.isEmpty())
+                .distinct().sorted().toList();
+        val existing = categoryValueRepository.findByColumnIdOrderByValueAsc(column.getId())
+                .stream().map(EntityColumnCategoryValueModel::getValue).collect(
+                        java.util.stream.Collectors.toSet());
+        val combined = new HashSet<>(existing);
+        combined.addAll(normalized);
+        if (combined.size() > 32) {
+            throw new ConflictException("Categorical vocabulary exceeds the governed limit");
+        }
+        normalized.stream()
+                .filter(value -> !existing.contains(value))
+                .forEach(value -> categoryValueRepository.save(
+                        EntityColumnCategoryValueModel.builder().id(UUID.randomUUID())
+                                .column(column).value(value).build()));
+    }
+
     private void localize(
             BusinessEntityModel entity, EntityDtos.StreamEntityDescriptor descriptor) {
         if (descriptor.nameTr() != null && !descriptor.nameTr().isBlank()) {
@@ -349,7 +412,9 @@ public class EntityManagementService {
                 turkish && column.getDescriptionTr() != null
                         ? column.getDescriptionTr() : column.getDescription(),
                 column.getOrdinalPosition(), column.getBusinessNameTr(),
-                column.getDescriptionTr());
+                column.getDescriptionTr(),
+                categoryValueRepository.findByColumnIdOrderByValueAsc(column.getId())
+                        .stream().map(EntityColumnCategoryValueModel::getValue).toList());
     }
 
     private EntityDtos.EntitySummary summary(BusinessEntityModel entity) {

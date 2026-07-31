@@ -16,6 +16,7 @@
   import { Button } from '$lib/components/ui/button/index.js';
   import ServerPagination from '$lib/components/ServerPagination.svelte';
   import DeleteExecutionButton from '$lib/components/DeleteExecutionButton.svelte';
+  import { openWorkspaceTab } from '$lib/workspace-tabs';
 
   let executions = $state<Execution[]>([]);
   let loading = $state(true);
@@ -29,7 +30,14 @@
   let totalPages = $state(0);
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
-  onMount(load);
+  onMount(() => {
+    openWorkspaceTab({
+      pageId: 'executions',
+      title: $t('executions'),
+      tabType: 'page'
+    });
+    void load();
+  });
   async function load(targetPage = pageNumber) {
     loading = true;
     error = '';
@@ -125,7 +133,7 @@
               <Table.Cell>{item.entityName ?? item.entityId}</Table.Cell>
               <Table.Cell>{item.requester ?? '—'}</Table.Cell>
               <Table.Cell>{formatDate(item.requestedAt, $locale === 'tr' ? 'tr-TR' : 'en-US')}</Table.Cell>
-              <Table.Cell>{formatDuration(item.startedAt, item.completedAt, $locale === 'tr' ? 'tr-TR' : 'en-US')}</Table.Cell>
+              <Table.Cell>{formatDuration(item.requestedAt, item.completedAt, $locale === 'tr' ? 'tr-TR' : 'en-US')}</Table.Cell>
               <Table.Cell><StatusBadge status={item.status} /></Table.Cell>
               <Table.Cell class="text-right">
                 {#if terminal(item.status)}

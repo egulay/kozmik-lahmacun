@@ -57,6 +57,7 @@ async def publish(arguments) -> tuple[UUID, int, int]:
 
 
 async def send_chunk(producer, arguments, stream_id, sequence, records) -> None:
+    regions = ["Akdeniz", "Ege", "Karadeniz", "Marmara", "İç Anadolu"]
     entity = {
         "id": str(arguments.entity_id),
         "name": arguments.csv.stem,
@@ -67,13 +68,16 @@ async def send_chunk(producer, arguments, stream_id, sequence, records) -> None:
             {"columnName": "event_time", "businessName": "Event time",
              "dataType": "TIMESTAMP", "ordinalPosition": 2},
             {"columnName": "origin_region", "businessName": "Origin region",
-             "dataType": "STRING", "ordinalPosition": 3},
+             "dataType": "STRING", "ordinalPosition": 3,
+             "categoricalValues": regions},
             {"columnName": "destination_region", "businessName": "Destination region",
-             "dataType": "STRING", "ordinalPosition": 4},
+             "dataType": "STRING", "ordinalPosition": 4,
+             "categoricalValues": regions},
             {"columnName": "duration_seconds", "businessName": "Duration seconds",
              "dataType": "INTEGER", "ordinalPosition": 5},
             {"columnName": "call_type", "businessName": "Call type", "dataType": "STRING",
-             "ordinalPosition": 6},
+             "ordinalPosition": 6,
+             "categoricalValues": ["INCOMING", "INTERNATIONAL", "OUTGOING"]},
             {"columnName": "roaming", "businessName": "Roaming", "dataType": "BOOLEAN",
              "ordinalPosition": 7},
             {"columnName": "charge_amount", "businessName": "Charge amount",

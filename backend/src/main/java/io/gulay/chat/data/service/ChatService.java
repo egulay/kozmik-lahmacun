@@ -73,11 +73,24 @@ public class ChatService {
     }
 
     @Transactional(readOnly = true)
-    public ChatDtos.MessageListResponse messages(UUID threadId, String keycloakUserId) {
+    public ChatDtos.MessageListResponse messages(
+            UUID threadId, String keycloakUserId, int page, int size) {
         owned(threadId, keycloakUserId);
-        return new ChatDtos.MessageListResponse(ChatDtos.VERSION,
-                messageRepository.findByThreadIdOrderBySequenceNumber(threadId)
-                        .stream().map(this::response).toList());
+        val pageable = PageRequest.of(page, size, Sort.by(
+                Sort.Order.desc("sequenceNumber"), Sort.Order.desc("id")));
+        val messagePage = messageRepository.findByThreadId(threadId, pageable);
+        val chronologicalPage = new ArrayDeque<ChatDtos.MessageResponse>();
+        messagePage.getContent().forEach(message ->
+                chronologicalPage.addFirst(response(message)));
+        return new ChatDtos.MessageListResponse(
+                ChatDtos.VERSION,
+                List.copyOf(chronologicalPage),
+                messagePage.getNumber(),
+                messagePage.getSize(),
+                messagePage.getTotalElements(),
+                messagePage.getTotalPages(),
+                messagePage.isFirst(),
+                messagePage.isLast());
     }
 
     @Transactional
@@ -87,6 +100,17 @@ public class ChatService {
                 .findLockedByIdAndOwnerId(threadId, owner.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("Chat thread not found"));
         threadRepository.delete(thread);
+    }
+
+    @Transactional
+    public ChatDtos.ThreadResponse renameThread(
+            UUID threadId, String keycloakUserId, ChatDtos.RenameThreadRequest request) {
+        val owner = user(keycloakUserId);
+        val thread = threadRepository
+                .findLockedByIdAndOwnerId(threadId, owner.getId())
+                .orElseThrow(() -> new ResourceNotFoundException("Chat thread not found"));
+        thread.rename(request.title().trim(), Instant.now(clock));
+        return response(thread);
     }
 
     @Transactional
@@ -150,15 +174,14 @@ public class ChatService {
 
     private PythonChatContracts.StreamRequest buildRequest(
             ChatThreadModel thread, ChatMessageModel assistant, String requestedLanguage) {
-        val all = messageRepository.findByThreadIdOrderBySequenceNumber(
-                thread.getId());
+        val recent = messageRepository.findByThreadIdAndStatus(
+                thread.getId(),
+                ChatMessageStatus.COMPLETED,
+                PageRequest.of(0, MAX_HISTORY_MESSAGES, Sort.by(
+                        Sort.Order.desc("sequenceNumber"), Sort.Order.desc("id"))));
         val selected = new ArrayDeque<PythonChatContracts.HistoryMessage>();
         var characters = 0;
-        for (var index = all.size() - 1; index >= 0 && selected.size() < MAX_HISTORY_MESSAGES; index--) {
-            val message = all.get(index);
-            if (message.getStatus() != ChatMessageStatus.COMPLETED) {
-                continue;
-            }
+        for (val message : recent) {
             if (characters + message.getCharacterCount() > MAX_HISTORY_CHARACTERS) {
                 break;
             }

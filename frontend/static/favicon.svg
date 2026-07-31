@@ -1,0 +1,37 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1e2327"/>
+      <stop offset="100%" stop-color="#12151a"/>
+    </linearGradient>
+    <radialGradient id="egg" cx="38%" cy="30%" r="80%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="35%" stop-color="#8ee3f0"/>
+      <stop offset="70%" stop-color="#6f7bf0"/>
+      <stop offset="100%" stop-color="#3a2f8f"/>
+    </radialGradient>
+    <linearGradient id="orbit" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#5fd0e6"/>
+      <stop offset="100%" stop-color="#7c6ff0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="104" fill="url(#bg)"/>
+
+  <!-- orbit ring around the egg -->
+  <ellipse cx="256" cy="270" rx="196" ry="86"
+           transform="rotate(-24 256 270)"
+           fill="none" stroke="url(#orbit)" stroke-width="14" opacity="0.85"/>
+
+  <!-- egg body -->
+  <path d="M256 108
+           C 336 108 384 216 384 300
+           C 384 384 326 424 256 424
+           C 186 424 128 384 128 300
+           C 128 216 176 108 256 108 Z"
+        fill="url(#egg)"/>
+
+  <!-- subtle crack / hatch line hinting at origin -->
+  <path d="M212 214 L236 250 L206 268 L246 312"
+        fill="none" stroke="#12151a" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" opacity="0.4"/>
+</svg>

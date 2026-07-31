@@ -116,6 +116,23 @@ class EntityManagementIntegrationTest {
         assertThat(turkishSchema.columns().get(0).businessName()).isEqualTo("Net tutar");
     }
 
+    @Test
+    void persistsBoundedCategoricalVocabularyAsColumnMetadata() {
+        val id = UUID.randomUUID();
+        val descriptor = new EntityDtos.StreamEntityDescriptor(
+                id, "Orders-" + id, "Order data",
+                List.of(new EntityDtos.ColumnDefinition(
+                        null, "channel", "Channel", ColumnDataType.STRING,
+                        "Sales channel", 1, null, null,
+                        List.of("WEB", "STORE", "PARTNER"))));
+
+        service.resolveOrRegisterStreamEntity(descriptor);
+        val schema = service.internalIngestionSchema(id);
+
+        assertThat(schema.columns().get(0).categoricalValues())
+                .containsExactly("PARTNER", "STORE", "WEB");
+    }
+
     private EntityDtos.StreamEntityDescriptor descriptor(
             UUID id, ColumnDataType type) {
         return new EntityDtos.StreamEntityDescriptor(

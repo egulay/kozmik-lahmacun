@@ -10,7 +10,9 @@ import kozmik_executor.execution.spark_ml as spark_ml_module
 from kozmik_executor.execution.spark_ml import SparkMlExecutor
 from kozmik_executor.planning.api import (
     _fit_trial_budget,
+    _normalize_ml_features,
     _remove_implicit_what_if_baseline,
+    _remove_unrequested_what_if,
     _requires_what_if,
 )
 from kozmik_executor.planning.ml import validate_ml_order
@@ -123,6 +125,38 @@ def test_llm_emitted_unchanged_baseline_is_removed_before_order_validation():
 
     assert [item["code"] for item in
             raw["payload"]["whatIfAnalysis"]["scenarios"]] == ["DISCOUNT_DOWN_5"]
+
+
+def test_unrequested_what_if_analysis_is_removed():
+    raw = {
+        "payload": {
+            "whatIfAnalysis": {
+                "objective": "MAXIMIZE_TARGET",
+                "scenarios": [{
+                    "code": "INVENTED",
+                    "changes": [{"column": "price", "percentChange": 5}],
+                }],
+            },
+        },
+    }
+
+    _remove_unrequested_what_if(raw, "Predict expected revenue")
+
+    assert "whatIfAnalysis" not in raw["payload"]
+
+
+def test_ml_features_are_limited_to_supported_authorized_columns():
+    planning = request()
+    raw = {
+        "payload": {
+            "targetColumn": "revenue",
+            "featureColumns": ["units", "unknown", "revenue", "units", "price"],
+        },
+    }
+
+    _normalize_ml_features(raw, planning)
+
+    assert raw["payload"]["featureColumns"] == ["units", "price"]
 
 
 @pytest.mark.parametrize(

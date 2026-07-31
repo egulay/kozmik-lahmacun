@@ -13,6 +13,8 @@ raw business rows, credentials, or unregistered operations. Do not invent column
 For complex predicates use the typed CONDITION/GROUP expression tree with only AND or OR.
 Apply row predicates through filters and aggregate predicates through having. Having may
 reference only grouped output names and aggregation aliases.
+When categoricalValues are supplied for a column, translate the user's business wording to
+one of those exact stored values. Never invent or rephrase a categorical filter value.
 Keep aliases as safe technical ASCII identifiers. For every selected, aggregated, or temporal
 output add displayLabel in requestedLanguage. Use the authorized localized businessName when
 available; never mix languages inside one display label.

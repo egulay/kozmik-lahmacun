@@ -15,7 +15,8 @@ describe('PdfExportButton', () => {
       username: 'reporter@example.test',
       displayName: 'Demo Reporter',
       email: 'reporter@example.test',
-      roles: ['REPORTER']
+      roles: ['REPORTER'],
+      workspaceGeneration: 'test-generation'
     });
     const reporterView = render(PdfExportButton, {
       props: { documentId: 'execution-id', documentType: 'execution' }
@@ -28,7 +29,8 @@ describe('PdfExportButton', () => {
       username: 'admin@example.test',
       displayName: 'Demo Admin',
       email: 'admin@example.test',
-      roles: ['ADMIN']
+      roles: ['ADMIN'],
+      workspaceGeneration: 'test-generation'
     });
     render(PdfExportButton, {
       props: { documentId: 'execution-id', documentType: 'execution' }

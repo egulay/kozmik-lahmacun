@@ -253,11 +253,19 @@ the following structure:
         "ordinalPosition": 3
       },
       {
+        "columnName": "call_type",
+        "businessName": "Call type",
+        "businessNameTr": "Arama türü",
+        "dataType": "STRING",
+        "ordinalPosition": 4,
+        "categoricalValues": ["INCOMING", "OUTGOING", "INTERNATIONAL"]
+      },
+      {
         "columnName": "charge_amount",
         "businessName": "Charge amount",
         "businessNameTr": "Ücret tutarı",
         "dataType": "DECIMAL",
-        "ordinalPosition": 4
+        "ordinalPosition": 5
       }
     ]
   },
@@ -297,6 +305,12 @@ Important contract rules:
   `BOOLEAN`, `DATE`, and `TIMESTAMP`.
 - Column names use a restricted identifier format; descriptions and Turkish
   display metadata are optional.
+- A string column may declare up to 32 exact `categoricalValues`. Direct CSV
+  ingestion discovers a vocabulary only when the complete column has at most
+  32 distinct values; identifier columns are excluded. These normalized values
+  let planning translate business wording to stored categories without sending
+  source records to the language model. Values outside a registered vocabulary
+  are rejected before Spark execution.
 - When the entity UUID already exists, its normalized stored structure is
   reused and structural drift is rejected. When it does not exist, Java
   transactionally registers the entity and its columns before processing.
@@ -338,7 +352,6 @@ prefixes rather than operating-system directories:
 | `refined` | `entities/{entityId}/streams/{streamId}/dataset/part-{sequence}-{chunkId}.parquet` | Immutable Parquet parts appended from bounded Kafka stream chunks. The sequence is zero-padded to 12 digits. |
 | `results` | `executions/{executionId}/{artifactId}.parquet` | Full report output or bounded ML-prediction artifact. |
 | `models` | `executions/{executionId}/{modelArtifactId}.zip` | Serialized Spark ML model artifact. |
-| `reports` | — | Reserved bucket initialized for future governed presentation artifacts; the current executor does not write report data here. |
 
 The entity UUID is therefore present in every governed dataset prefix, while
 execution outputs are isolated by execution UUID. Java persists the matching

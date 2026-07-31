@@ -164,6 +164,13 @@ class SparkReportExecutor:
         row_count = transformed.count()
         preview_limit = order.constraints.max_preview_rows
         preview_rows = [row.asDict(recursive=True) for row in transformed.limit(preview_limit).collect()]
+        chart_rows = preview_rows
+        if order.payload.aggregations and row_count > preview_limit:
+            chart_limit = min(order.payload.limit, 1000)
+            chart_rows = [
+                row.asDict(recursive=True)
+                for row in transformed.limit(chart_limit).collect()
+            ]
         display_labels = self._display_labels(order)
         columns = [{"name": field.name, "type": field.dataType.simpleString().upper(),
                     "label": display_labels.get(field.name)}
@@ -176,17 +183,13 @@ class SparkReportExecutor:
             part = next(output.glob("part-*.parquet"))
             self.minio.fput_object("results", object_key, str(part))
             size = part.stat().st_size
-        warnings = []
-        if row_count > preview_limit:
-            warnings.append({"code": "RESULT_TRUNCATED",
-                             "messageKey": "result.warning.truncated"})
         return {
             "rowCount": row_count,
             "preview": {"columns": columns, "rows": preview_rows, "limit": preview_limit,
                         "truncated": row_count > preview_limit},
             "kpis": self._kpis(order, preview_rows),
-            "charts": self._charts(order, preview_rows),
-            "warnings": warnings,
+            "charts": self._charts(order, chart_rows),
+            "warnings": [],
             "artifact": {"artifactId": str(artifact_id), "format": "PARQUET",
                          "bucket": "results", "objectKey": object_key, "sizeBytes": size},
         }
@@ -272,7 +275,7 @@ class SparkReportExecutor:
 
     @staticmethod
     def _kpis(order: ReportOrder, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if not rows:
+        if not rows or order.payload.group_by or order.payload.temporal_group_by:
             return []
         return [
             {"code": item.alias.upper(), "labelKey": f"result.kpi.{item.alias}",
@@ -320,15 +323,21 @@ class SparkReportExecutor:
                 ),
                 None,
             )
-            categories = list(dict.fromkeys(row.get(category) for row in rows))
+            categories = list(dict.fromkeys(
+                row.get(category) for row in rows if row.get(category) is not None
+            ))
             if hint.chart_type in {"BAR", "LINE"} and series_field:
                 series_names = list(dict.fromkeys(
                     row.get(series_field) for row in rows
+                    if row.get(series_field) is not None
                 ))
-                values = {
-                    (row.get(category), row.get(series_field)): row.get(value)
-                    for row in rows
-                }
+                values: dict[tuple[Any, Any], Any] = {}
+                for row in rows:
+                    key = (row.get(category), row.get(series_field))
+                    current = row.get(value)
+                    if key[0] is None or key[1] is None or current is None:
+                        continue
+                    values[key] = values.get(key, 0) + current
                 series = [
                     {
                         "name": name,
@@ -338,9 +347,16 @@ class SparkReportExecutor:
                     for name in series_names
                 ]
             else:
+                values: dict[Any, Any] = {}
+                for row in rows:
+                    key = row.get(category)
+                    current = row.get(value)
+                    if key is None or current is None:
+                        continue
+                    values[key] = values.get(key, 0) + current
                 series = [{
                     "name": value,
-                    "data": [row.get(value) for row in rows],
+                    "data": [values.get(category_name) for category_name in categories],
                 }]
             charts.append({
                 "chartId": f"chart-{index + 1}",

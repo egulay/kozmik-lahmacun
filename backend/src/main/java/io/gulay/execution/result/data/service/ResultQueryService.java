@@ -27,7 +27,8 @@ public class ResultQueryService {
 
     @Transactional(readOnly = true)
     public ResultDtos.ResultResponse result(
-            UUID executionId, String keycloakUserId, Set<PlatformRole> roles) {
+            UUID executionId, String keycloakUserId, Set<PlatformRole> roles,
+            int page, int size) {
         val execution = roles.contains(PlatformRole.ADMIN)
                 ? executions.findById(executionId)
                 : executions.findByIdAndOwnerKeycloakUserId(executionId, keycloakUserId);
@@ -38,12 +39,29 @@ public class ResultQueryService {
         val artifact = artifacts.findByResultId(result.getId()).stream().findFirst()
                 .orElseThrow(() -> new IllegalStateException("Result artifact is missing"));
         try {
+            val preview = mapper.readTree(result.getPreviewJson());
+            val rows = preview.path("rows");
+            val totalElements = rows.isArray() ? rows.size() : 0;
+            val totalPages = totalElements == 0 ? 0
+                    : (int) Math.ceil((double) totalElements / size);
+            val start = (int) Math.min((long) page * size, totalElements);
+            val end = Math.min(start + size, totalElements);
+            val pagedRows = mapper.createArrayNode();
+            for (var index = start; index < end; index++) {
+                pagedRows.add(rows.get(index));
+            }
+            val pagedPreview = mapper.createObjectNode();
+            pagedPreview.set("columns", preview.path("columns"));
+            pagedPreview.set("rows", pagedRows);
+            pagedPreview.put("limit", size);
+            pagedPreview.put("truncated", preview.path("truncated").asBoolean(false));
             return new ResultDtos.ResultResponse("1.0", executionId, result.getRowCount(),
-                    mapper.readTree(result.getPreviewJson()), mapper.readTree(result.getKpisJson()),
+                    pagedPreview, mapper.readTree(result.getKpisJson()),
                     mapper.readTree(result.getChartsJson()), mapper.readTree(result.getWarningsJson()),
                     new ResultDtos.ArtifactResponse(artifact.getId(), artifact.getFormat()),
                     "result.guidance.governedPreview",
-                    result.getSummaryStatus(), result.getManagementSummary());
+                    result.getSummaryStatus(), result.getManagementSummary(),
+                    page, size, totalElements, totalPages);
         } catch (Exception exception) {
             throw new IllegalStateException("Stored result is invalid", exception);
         }

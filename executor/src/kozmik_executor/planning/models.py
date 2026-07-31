@@ -65,6 +65,7 @@ class AuthorizedColumn(ContractModel):
     column_name: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$", max_length=160)
     business_name: str = Field(min_length=1, max_length=200)
     data_type: DataType
+    categorical_values: list[str] = Field(default_factory=list, max_length=32)
 
 
 class AuthorizedSchema(ContractModel):

@@ -64,10 +64,10 @@ def test_trusted_registry_executes_deterministic_dataset_and_writes_parquet(tmp_
     assert result["preview"]["columns"][0]["label"] == "Bölge"
     assert result["preview"]["columns"][1]["label"] == "Toplam satış"
     assert result["preview"]["truncated"] is True
-    assert result["kpis"][0]["value"] == 30
+    assert result["kpis"] == []
     assert result["charts"][0]["type"] == "BAR"
-    assert result["charts"][0]["categories"] == ["TR"]
-    assert result["charts"][0]["series"][0]["data"] == [30]
+    assert result["charts"][0]["categories"] == ["TR", "DE"]
+    assert result["charts"][0]["series"][0]["data"] == [30, 7]
     assert minio.upload[0] == "results"
     assert minio.upload[1].startswith(f"executions/{execution_id}/")
     assert shutil.which("java") is not None
@@ -165,6 +165,45 @@ def test_grouped_bar_chart_uses_second_grouping_dimension_as_series():
         {"name": "WEB", "data": [10, 30]},
         {"name": "STORE", "data": [20, 40]},
     ]
+
+
+def test_charts_aggregate_dimensions_not_displayed_by_the_chart():
+    order = ReportOrder.model_validate({
+        "schemaVersion": "1.0", "executionType": "REPORT",
+        "entityId": str(uuid4()), "requestedLanguage": "en",
+        "requestSummary": "Calls by month, type, and region",
+        "constraints": {"maxPreviewRows": 100, "timeoutSeconds": 30},
+        "payload": {
+            "select": [
+                {"column": "month"}, {"column": "call_type"}, {"column": "region"},
+            ],
+            "filters": [], "groupBy": ["month", "call_type", "region"],
+            "aggregations": [{"function": "COUNT", "alias": "total_calls"}],
+            "orderBy": [], "limit": 100,
+            "chartHints": [
+                {"chartType": "LINE", "categoryColumn": "month",
+                 "valueColumn": "total_calls"},
+                {"chartType": "PIE", "categoryColumn": "call_type",
+                 "valueColumn": "total_calls"},
+            ],
+        },
+    })
+    rows = [
+        {"month": "Jan", "call_type": "VOICE", "region": "Ege", "total_calls": 10},
+        {"month": "Jan", "call_type": "VOICE", "region": "Marmara", "total_calls": 20},
+        {"month": "Jan", "call_type": "SMS", "region": "Ege", "total_calls": 5},
+        {"month": "Feb", "call_type": "VOICE", "region": "Ege", "total_calls": 7},
+        {"month": "Feb", "call_type": "SMS", "region": "Ege", "total_calls": 3},
+    ]
+
+    line, pie = SparkReportExecutor._charts(order, rows)
+
+    assert line["series"] == [
+        {"name": "VOICE", "data": [30, 7]},
+        {"name": "SMS", "data": [5, 3]},
+    ]
+    assert pie["categories"] == ["VOICE", "SMS"]
+    assert pie["series"][0]["data"] == [37, 8]
 
 
 def test_natural_language_string_filters_are_case_insensitive(spark):

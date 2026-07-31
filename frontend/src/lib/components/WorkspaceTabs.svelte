@@ -1,9 +1,18 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
-  import { X } from '@lucide/svelte';
+  import {
+    Activity,
+    ChartNoAxesCombined,
+    Database,
+    MessageSquareText,
+    Users,
+    X
+  } from '@lucide/svelte';
   import {
     closeWorkspaceTab,
+    workspaceTabKey,
+    workspaceTabResourceId,
     workspaceTabs,
     type WorkspaceTab
   } from '$lib/workspace-tabs';
@@ -14,7 +23,19 @@
   import ExecutionTypeIcon from './ExecutionTypeIcon.svelte';
 
   const activeValue = $derived(
-    $page.url.pathname.startsWith('/executions/')
+    $page.url.pathname === '/chat' && $page.url.searchParams.get('thread')
+      ? `chat:${$page.url.searchParams.get('thread')}`
+      : $page.url.pathname === '/entities'
+        ? 'page:entities'
+        : $page.url.pathname === '/executions'
+          ? 'page:executions'
+          : $page.url.pathname === '/results'
+            ? 'page:results'
+        : $page.url.pathname.startsWith('/entities/')
+          ? `entity:${$page.params.id}`
+          : $page.url.pathname === '/admin/users'
+            ? 'page:users'
+      : $page.url.pathname.startsWith('/executions/')
       ? `execution:${$page.params.id}`
       : $page.url.pathname.startsWith('/results/')
         ? `result:${$page.params.id}`
@@ -22,11 +43,23 @@
   );
 
   function value(tab: WorkspaceTab) {
-    return `${tab.tabType}:${tab.executionId}`;
+    return workspaceTabKey(tab);
   }
 
   function href(tab: WorkspaceTab) {
+    if (tab.tabType === 'chat') return `/chat?thread=${encodeURIComponent(tab.threadId)}`;
+    if (tab.tabType === 'entity') return `/entities/${tab.entityId}`;
+    if (tab.tabType === 'page') {
+      if (tab.pageId === 'entities') return '/entities';
+      if (tab.pageId === 'executions') return '/executions';
+      if (tab.pageId === 'results') return '/results';
+      return '/admin/users';
+    }
     return `/${tab.tabType === 'execution' ? 'executions' : 'results'}/${tab.executionId}`;
+  }
+
+  function title(tab: WorkspaceTab) {
+    return tab.tabType === 'page' ? $t(tab.pageId) : tab.title;
   }
 
   async function close(event: MouseEvent, tab: WorkspaceTab) {
@@ -34,7 +67,7 @@
     event.stopPropagation();
 
     const wasActive = activeValue === value(tab);
-    closeWorkspaceTab(tab.tabType, tab.executionId);
+    closeWorkspaceTab(tab.tabType, workspaceTabResourceId(tab));
 
     if (!wasActive) return;
     const remaining = $workspaceTabs.filter((item) => value(item) !== value(tab));
@@ -66,24 +99,38 @@
                       class="max-w-52 gap-2"
                       onclick={() => goto(href(tab))}
                     >
-                      <ExecutionTypeIcon
-                        kind={tab.kind}
-                        status={tab.status}
-                        context={tab.tabType}
-                      />
-                      <span class="truncate">{tab.title}</span>
+                      {#if tab.tabType === 'chat'}
+                        <MessageSquareText />
+                      {:else if tab.tabType === 'entity' || (tab.tabType === 'page' && tab.pageId === 'entities')}
+                        <Database />
+                      {:else if tab.tabType === 'page' && tab.pageId === 'executions'}
+                        <Activity />
+                      {:else if tab.tabType === 'page' && tab.pageId === 'results'}
+                        <ChartNoAxesCombined />
+                      {:else if tab.tabType === 'page'}
+                        <Users />
+                      {:else}
+                        <ExecutionTypeIcon
+                          kind={tab.kind}
+                          status={tab.status}
+                          context={tab.tabType}
+                        />
+                      {/if}
+                      <span class="truncate">{title(tab)}</span>
                     </Tabs.Trigger>
                   {/snippet}
                 </Tooltip.Trigger>
                 <Tooltip.Content class="max-w-sm whitespace-normal">
-                  {tab.title} · {tab.status}
+                  {title(tab)}{tab.tabType === 'execution' || tab.tabType === 'result'
+                    ? ` · ${tab.status}`
+                    : ''}
                 </Tooltip.Content>
               </Tooltip.Root>
             </Tooltip.Provider>
             <Button
               variant="ghost"
               size="icon-xs"
-              aria-label={`${$t('closeTab')}: ${tab.title}`}
+              aria-label={`${$t('closeTab')}: ${title(tab)}`}
               onclick={(event) => close(event, tab)}
             >
               <X />
