@@ -33,6 +33,7 @@ describe('result presentation formatting', () => {
   it('humanizes technical result aliases', () => {
     expect(humanizeField('total_sales', 'en-US')).toBe('Total sales');
     expect(humanizeField('AVG_DISCOUNT_RATE', 'en-US')).toBe('Average discount rate');
+    expect(humanizeField('Monthly Call Count', 'en-US')).toBe('Monthly call count');
   });
 
   it('formats governed temporal buckets at their requested granularity', () => {

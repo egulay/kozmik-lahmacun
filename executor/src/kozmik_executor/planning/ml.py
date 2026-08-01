@@ -104,11 +104,36 @@ def validate_ml_order(order: MlOrder, request: ReportPlanningRequest) -> None:
                                       message="Entity is not authorized"))
     columns = {column.column_name: column for column in request.authorized_schema.columns}
     target = columns.get(order.payload.target_column)
-    if (
-        target is None or target.data_type not in NUMERIC
-    ):
+    derivation = order.payload.binary_target_derivation
+    if derivation is None and (target is None or target.data_type not in NUMERIC):
         issues.append(ValidationIssue(code="TARGET_NOT_ALLOWED", path="payload.targetColumn",
                                       message="Target must be an eligible numeric column"))
+    if derivation is not None:
+        source = columns.get(derivation.source_column)
+        if order.payload.problem_type != "BINARY_CLASSIFICATION":
+            issues.append(ValidationIssue(
+                code="DERIVED_TARGET_REQUIRES_BINARY_CLASSIFICATION",
+                path="payload.binaryTargetDerivation",
+                message="A derived threshold target requires binary classification",
+            ))
+        if target is not None:
+            issues.append(ValidationIssue(
+                code="DERIVED_TARGET_COLLIDES_WITH_SOURCE_SCHEMA",
+                path="payload.targetColumn",
+                message="A derived target name must not replace an existing source column",
+            ))
+        if source is None or source.data_type not in NUMERIC:
+            issues.append(ValidationIssue(
+                code="DERIVED_TARGET_SOURCE_NOT_ALLOWED",
+                path="payload.binaryTargetDerivation.sourceColumn",
+                message="A derived target requires an authorized numeric source column",
+            ))
+        if derivation.source_column in order.payload.feature_columns:
+            issues.append(ValidationIssue(
+                code="DERIVED_TARGET_SOURCE_IS_FEATURE",
+                path="payload.featureColumns",
+                message="The source used to derive the target cannot also be a feature",
+            ))
     if len(set(order.payload.feature_columns)) != len(order.payload.feature_columns):
         issues.append(ValidationIssue(code="DUPLICATE_FEATURE", path="payload.featureColumns",
                                       message="Features must be unique"))
@@ -285,6 +310,11 @@ return bounded candidateAlgorithms parameter grids plus a TRAIN_VALIDATION_SPLIT
 Never exceed 50 proposed trials. Prefer the simplest suitable candidates unless the objective
 justifies tree, ensemble, gradient-boosted, or XGBoost models. Choose representative tuning
 values inside the approved ranges; do not mechanically use the minimum and maximum bounds.
+When the user asks which records are likely to exceed or fall below a numeric threshold, use
+BINARY_CLASSIFICATION with binaryTargetDerivation. Set sourceColumn to the authorized numeric
+column, operator to GT, GTE, LT, or LTE, threshold to the requested numeric boundary, and use a
+new targetColumn alias that does not collide with the source schema. Never include sourceColumn
+in featureColumns because that would leak the answer into the model.
 When the user asks whether management should increase, decrease, change, adjust, maintain,
 expand, or limit numeric inputs, include whatIfAnalysis. Use MAXIMIZE_TARGET or MINIMIZE_TARGET
 as requested and provide at most six bounded scenarios. Prefer paired one-variable percentage

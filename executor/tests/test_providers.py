@@ -68,10 +68,28 @@ async def test_retry_policy_recovers_from_transient_network_errors() -> None:
 
 
 @pytest.mark.anyio
+async def test_openai_compatible_omits_temperature_for_reasoning_models() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert "temperature" not in payload
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": '{"intent":"CONVERSATIONAL"}'}}]},
+        )
+
+    provider = OpenAiCompatibleProvider(
+        config("OPENAI_COMPATIBLE"), transport=httpx.MockTransport(handler)
+    )
+
+    assert await provider.classify("Hi") == IntentType.CONVERSATIONAL
+
+
+@pytest.mark.anyio
 async def test_classification_accepts_lm_studio_markdown_json_without_response_format() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
         assert "response_format" not in payload
+        assert payload["temperature"] == 0
         return httpx.Response(
             200,
             json={"choices": [{"message": {
@@ -173,6 +191,24 @@ async def test_provider_health_rejects_missing_configured_model() -> None:
     assert captured.value.code == "LLM_MODEL_NOT_AVAILABLE"
     assert "test-model" in str(captured.value)
     assert "another-model" in str(captured.value)
+
+
+@pytest.mark.anyio
+async def test_provider_readiness_reports_authentication_failure() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": {"code": "invalid_api_key"}})
+
+    provider = OpenAiCompatibleProvider(
+        config("OPENAI_COMPATIBLE"),
+        api_key="invalid-test-key",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(ProviderError) as captured:
+        await provider.ensure_ready()
+
+    assert captured.value.code == "LLM_PROVIDER_AUTHENTICATION_FAILED"
+    assert "invalid-test-key" not in str(captured.value)
 
 
 @pytest.mark.anyio

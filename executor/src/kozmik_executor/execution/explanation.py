@@ -53,6 +53,18 @@ class ApprovedReportHighlight(ContractModel):
     value: int | float
 
 
+class ApprovedReportComparison(ContractModel):
+    measure: str = Field(max_length=100)
+    highest_dimensions: dict[str, int | float | str | bool | None] = Field(max_length=20)
+    highest_value: float
+    lowest_dimensions: dict[str, int | float | str | bool | None] = Field(max_length=20)
+    lowest_value: float
+    absolute_difference: float = Field(ge=0)
+    percentage_difference: float | None = None
+    highest_share_percent: float | None = Field(default=None, ge=0, le=100)
+    group_count: int = Field(ge=2)
+
+
 class SummaryFacts(ContractModel):
     schema_version: Literal["1.0"] = "1.0"
     execution_type: Literal["REPORT", "ML"]
@@ -68,6 +80,8 @@ class SummaryFacts(ContractModel):
     report_breakdown: list[ApprovedReportBreakdown] = Field(
         default_factory=list, max_length=10)
     report_highlights: list[ApprovedReportHighlight] = Field(
+        default_factory=list, max_length=10)
+    report_comparisons: list[ApprovedReportComparison] = Field(
         default_factory=list, max_length=10)
     facts: list[ApprovedFact] = Field(max_length=20)
     warnings: list[ApprovedWarning] = Field(max_length=20)
@@ -134,6 +148,8 @@ class ResultExplainer:
         scenario_objective, scenarios = self._approved_scenarios(result)
         report_breakdown = self._approved_report_breakdown(command, result)
         report_highlights = self._approved_report_highlights(result)
+        report_comparisons = self._approved_report_comparisons(
+            command, result, report_breakdown)
         facts = SummaryFacts(
             executionType=command.execution_type, language=language,
             rowCount=result["rowCount"], objective=command.order.request_summary[:500],
@@ -142,6 +158,7 @@ class ResultExplainer:
             scenarioObjective=scenario_objective, scenarios=scenarios,
             reportBreakdown=report_breakdown,
             reportHighlights=report_highlights,
+            reportComparisons=report_comparisons,
             facts=approved_facts, warnings=warnings)
         encoded = facts.model_dump_json(by_alias=True)
         if len(encoded) > self.MAX_FACTS_JSON:
@@ -175,8 +192,13 @@ class ResultExplainer:
                 "For a REPORT, approved facts, reportBreakdown, and reportHighlights are "
                 "calculated aggregate business results. reportHighlights identifies the "
                 "leading category in each requested chart after remaining grouped dimensions "
-                "have been aggregated. Use their values to describe the main comparison, range, "
-                "ranking, or time pattern in plain language. You may state these approved "
+                "have been aggregated. reportComparisons contains deterministic comparisons "
+                "calculated across the complete governed report result, not merely its browser "
+                "preview. When supplied, identify both the highest and lowest result for the "
+                "primary measure, quantify their absolute or percentage difference, and explain "
+                "whether the leading group is concentrated or the groups are relatively close. "
+                "Use their values to describe the main comparison, range, ranking, or time "
+                "pattern in plain language. You may state these approved "
                 "aggregate values. reportBreakdown contains bounded grouped aggregates, not raw "
                 "source rows. Never claim that governed facts are absent when facts or "
                 "reportBreakdown is non-empty. Summarize the requested comparison without adding "
@@ -187,10 +209,14 @@ class ResultExplainer:
                 "statement. Translate them into business language: MAE is the average absolute "
                 "difference in target units, RMSE reflects the typical scale when larger misses "
                 "receive more weight, and R2 is the share of observed variation captured. Mention "
-                "one or two rounded values without using metric abbreviations, and never describe "
+                "up to three decision-relevant rounded values without using metric abbreviations, "
+                "and never describe "
                 "R2 as probability or confidence. Do not repeat algorithm names, row counts, "
                 "tuning trials, or split details; those are shown elsewhere. Explain a practical "
-                "use that follows from the stated objective and strongest supplied drivers. "
+                "use that follows from the stated objective, strongest and secondary supplied "
+                "drivers, and the measured reliability. If several approaches were evaluated, "
+                "state only that suitable approaches were compared and the strongest measured "
+                "result was selected; keep implementation names out of the management summary. "
                 "Do not recommend increasing, decreasing, "
                 "raising, reducing, changing, adjusting, maintaining, expanding, or limiting "
                 "any business input unless approved scenario facts directly establish it. "
@@ -223,7 +249,7 @@ class ResultExplainer:
                     "describe the figure only as an amount, value, or result. "
                     "Do not claim a forecast, causal effect, or guaranteed outcome unless "
                     "approved scenario facts directly establish it. "
-                    "Write one short paragraph of at most 80 words. "
+                    "Write one informative paragraph of at most 140 words. "
                     "Return only the paragraph text. Do not add headings, labels, Markdown, "
                     "'Decision Summary', 'Approved Warnings', or a warnings section. "
                     "Do not infer identifiers, people, customers, raw rows, or unsupported causes. "
@@ -239,6 +265,7 @@ class ResultExplainer:
                 raise ProviderError("LLM_SUMMARY_EMPTY")
             violations = self._management_violations(text)
             violations.extend(self._grounding_violations(text, facts))
+            violations.extend(self._report_comparison_violations(text, facts))
             violations.extend(self._unit_grounding_violations(text, facts))
             violations.extend(self._ml_specificity_violations(text, facts))
             violations.extend(self._zero_result_violations(text, facts))
@@ -259,6 +286,7 @@ class ResultExplainer:
             remaining_violations = (
                 self._management_violations(text)
                 + self._grounding_violations(text, facts)
+                + self._report_comparison_violations(text, facts)
                 + self._unit_grounding_violations(text, facts)
                 + self._ml_specificity_violations(text, facts)
                 + self._zero_result_violations(text, facts)
@@ -288,6 +316,7 @@ class ResultExplainer:
             final_violations = (
                 self._management_violations(text)
                 + self._grounding_violations(text, facts)
+                + self._report_comparison_violations(text, facts)
                 + self._unit_grounding_violations(text, facts)
                 + self._ml_specificity_violations(text, facts)
                 + self._zero_result_violations(text, facts)
@@ -472,6 +501,55 @@ class ResultExplainer:
         return highlights
 
     @staticmethod
+    def _approved_report_comparisons(
+        command: ExecutionCommand,
+        result: dict[str, Any],
+        breakdown: list[ApprovedReportBreakdown],
+    ) -> list[ApprovedReportComparison]:
+        if command.execution_type != "REPORT":
+            return []
+        internal = result.get("summaryFacts")
+        supplied = internal.get("reportComparisons") if isinstance(internal, dict) else None
+        if isinstance(supplied, list):
+            return [
+                ApprovedReportComparison.model_validate(item)
+                for item in supplied[:5] if isinstance(item, dict)
+            ]
+        if len(breakdown) < 2:
+            return []
+        comparisons = []
+        for measure in list(breakdown[0].measures)[:5]:
+            numeric = [
+                (item, number)
+                for item in breakdown
+                if (number := ResultExplainer._numeric_value(
+                    item.measures.get(measure))) is not None
+            ]
+            if len(numeric) < 2:
+                continue
+            highest, highest_value = max(numeric, key=lambda item: item[1])
+            lowest, lowest_value = min(numeric, key=lambda item: item[1])
+            difference = highest_value - lowest_value
+            total = sum(value for _, value in numeric)
+            comparisons.append(ApprovedReportComparison(
+                measure=measure,
+                highestDimensions=highest.dimensions,
+                highestValue=highest_value,
+                lowestDimensions=lowest.dimensions,
+                lowestValue=lowest_value,
+                absoluteDifference=difference,
+                percentageDifference=(
+                    difference / abs(lowest_value) * 100 if lowest_value != 0 else None
+                ),
+                highestSharePercent=(
+                    highest_value / total * 100
+                    if total > 0 and lowest_value >= 0 else None
+                ),
+                groupCount=len(numeric),
+            ))
+        return comparisons
+
+    @staticmethod
     async def _complete(provider, messages: list[dict[str, str]]) -> str:
         chunks = []
         length = 0
@@ -485,8 +563,8 @@ class ResultExplainer:
     @staticmethod
     def _management_violations(text: str) -> list[str]:
         violations = []
-        if len(text.split()) > 100:
-            violations.append("maximum 100 words")
+        if len(text.split()) > 140:
+            violations.append("maximum 140 words")
         technical = re.compile(
             r"\b(?:regressor|classifier|hyperparameters?|tuning trials?|"
             r"training split|validation split|test[- ]set|r2|rmse|mae|gbt|xgboost|"
@@ -524,6 +602,29 @@ class ResultExplainer:
             re.IGNORECASE,
         )
         return ["use the supplied governed report facts"] if empty_claim.search(text) else []
+
+    @staticmethod
+    def _report_comparison_violations(text: str, facts: SummaryFacts) -> list[str]:
+        if facts.execution_type != "REPORT" or not facts.report_comparisons:
+            return []
+        comparison = facts.report_comparisons[0]
+
+        def searchable_labels(values: dict[str, Any]) -> list[str]:
+            return [
+                str(value).casefold()
+                for value in values.values()
+                if isinstance(value, (str, int, float))
+                and not re.match(r"^\d{4}-\d{2}(?:-\d{2})?(?:[tT].*)?$", str(value))
+            ]
+
+        normalized = text.casefold()
+        highest = searchable_labels(comparison.highest_dimensions)
+        lowest = searchable_labels(comparison.lowest_dimensions)
+        if highest and not any(label in normalized for label in highest):
+            return ["identify the highest group from reportComparisons"]
+        if lowest and not any(label in normalized for label in lowest):
+            return ["identify the lowest group from reportComparisons"]
+        return []
 
     @staticmethod
     def _unit_grounding_violations(text: str, facts: SummaryFacts) -> list[str]:
@@ -632,6 +733,60 @@ class ResultExplainer:
                 "No comparison or business finding was produced."
             )
         if facts.execution_type == "REPORT":
+            if facts.report_comparisons:
+                comparison = facts.report_comparisons[0]
+                highest = ", ".join(
+                    str(value) for value in comparison.highest_dimensions.values()
+                ) or "the leading group"
+                lowest = ", ".join(
+                    str(value) for value in comparison.lowest_dimensions.values()
+                ) or "the lowest group"
+                measure = comparison.measure.replace("_", " ")
+                high_value = ResultExplainer._display_number(
+                    comparison.highest_value, facts.language)
+                low_value = ResultExplainer._display_number(
+                    comparison.lowest_value, facts.language)
+                difference = ResultExplainer._display_number(
+                    comparison.absolute_difference, facts.language)
+                percentage = (
+                    ResultExplainer._display_number(
+                        comparison.percentage_difference, facts.language)
+                    if comparison.percentage_difference is not None else None
+                )
+                share = (
+                    ResultExplainer._display_number(
+                        comparison.highest_share_percent, facts.language)
+                    if comparison.highest_share_percent is not None else None
+                )
+                if facts.language == "tr":
+                    spread = (
+                        f" Aradaki fark {difference} (%{percentage})."
+                        if percentage is not None else f" Aradaki fark {difference}."
+                    )
+                    concentration = (
+                        f" Lider grubun {comparison.group_count} grup içindeki payı %{share}."
+                        if share is not None else ""
+                    )
+                    return (
+                        f"{measure} karşılaştırmasında en yüksek sonuç {highest} için "
+                        f"{high_value}, en düşük sonuç ise {lowest} için {low_value}."
+                        f"{spread}{concentration} Bu görünüm, güçlü ve geliştirilmesi gereken "
+                        "grupları aynı ölçüte göre önceliklendirmek için kullanılabilir."
+                    )
+                spread = (
+                    f" The difference is {difference} ({percentage}%)."
+                    if percentage is not None else f" The difference is {difference}."
+                )
+                concentration = (
+                    f" The leader represents {share}% across {comparison.group_count} groups."
+                    if share is not None else ""
+                )
+                return (
+                    f"For {measure}, {highest} is highest at {high_value}, while {lowest} is "
+                    f"lowest at {low_value}.{spread}{concentration} This comparison can help "
+                    "management prioritize the strongest groups and those requiring attention "
+                    "using the same measure."
+                )
             if facts.report_highlights:
                 rendered = "; ".join(
                     f"{item.category_field.replace('_', ' ')}: "
@@ -728,6 +883,12 @@ class ResultExplainer:
                 if facts.scenario_objective == "MAXIMIZE_TARGET"
                 else min(facts.scenarios, key=lambda item: item.delta_percent)
             )
+            opposite = (
+                min(facts.scenarios, key=lambda item: item.delta_percent)
+                if facts.scenario_objective == "MAXIMIZE_TARGET"
+                else max(facts.scenarios, key=lambda item: item.delta_percent)
+            )
+            target = (facts.target or "requested outcome").replace("_", " ")
             if facts.language == "tr":
                 changes = ", ".join(
                     f"{item.column.replace('_', ' ')} değerinin göreli olarak "
@@ -736,9 +897,10 @@ class ResultExplainer:
                     for item in selected.changes
                 )
                 return (
-                    f"Test edilen varsayımlar altında {changes} senaryosu, beklenen net satış "
-                    f"tutarında başlangıca göre %{selected.delta_percent:+.2f} ile incelenen "
-                    "seçenekler arasındaki en güçlü iyileşmeyi sağladı. Yönetim bu seçeneği genel "
+                    f"Test edilen varsayımlar altında {changes} senaryosu, beklenen {target} "
+                    f"sonucunda başlangıca göre %{selected.delta_percent:+.2f} ile incelenen "
+                    "seçenekler arasındaki en güçlü sonucu sağladı. En zayıf senaryonun farkı "
+                    f"%{opposite.delta_percent:+.2f} oldu. Yönetim güçlü seçeneği genel "
                     "bir değişiklik olarak hemen uygulamak yerine, sınırlı bir pilot uygulamada "
                     "öncelikle test edebilir."
                 )
@@ -750,8 +912,9 @@ class ResultExplainer:
             )
             return (
                 f"Under the tested assumptions, the {changes} scenario produced the strongest "
-                f"improvement in expected net sales among the options examined: "
-                f"{selected.delta_percent:+.2f}% versus the baseline. Management can prioritize "
+                f"result for expected {target} among the options examined: "
+                f"{selected.delta_percent:+.2f}% versus the baseline; the weakest scenario was "
+                f"{opposite.delta_percent:+.2f}%. Management can prioritize "
                 "this option for a limited, controlled business test rather than apply it "
                 "company-wide immediately."
             )

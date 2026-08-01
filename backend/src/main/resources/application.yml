@@ -115,7 +115,7 @@ kozmik:
   ingestion:
     system-keycloak-user-id: ${INGESTION_SYSTEM_KEYCLOAK_USER_ID:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3}
   execution:
-    timeout-seconds: ${EXECUTION_TIMEOUT_SECONDS:1800}
+    timeout-seconds: ${EXECUTION_TIMEOUT_SECONDS:7200}
     max-concurrent-jobs: ${SPARK_MAX_CONCURRENT_JOBS:4}
     max-preview-rows: ${EXECUTION_MAX_PREVIEW_ROWS:100}
     dataset-uri: ${EXECUTION_DATASET_URI:}
@@ -130,6 +130,9 @@ kozmik:
     action-email-lifespan-seconds: ${KEYCLOAK_ACTION_EMAIL_LIFESPAN_SECONDS:900}
   python:
     base-url: ${PYTHON_BASE_URL:http://localhost:8000}
+    planning-timeout-seconds: ${PYTHON_PLANNING_TIMEOUT_SECONDS:660}
+    classification-timeout-seconds: ${PYTHON_CLASSIFICATION_TIMEOUT_SECONDS:240}
+    chat-stream-timeout-seconds: ${PYTHON_CHAT_STREAM_TIMEOUT_SECONDS:240}
   retention:
     cron: ${RETENTION_CRON:0 17 2 * * *}
     hard-delete-cron: ${RETENTION_HARD_DELETE_CRON:0 0 0 * * *}

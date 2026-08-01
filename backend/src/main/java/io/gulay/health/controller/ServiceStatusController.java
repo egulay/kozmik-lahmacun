@@ -27,16 +27,19 @@ public class ServiceStatusController {
                 "1.0",
                 Instant.now(),
                 List.of(
-                        new ServiceStatus("backend", "AVAILABLE"),
-                        new ServiceStatus("executor", snapshot.pythonStatus()),
-                        new ServiceStatus("llm", snapshot.providerStatus()),
-                        new ServiceStatus("kafka", kafkaHealth.check())));
+                        new ServiceStatus("backend", "AVAILABLE", null, null),
+                        new ServiceStatus("executor", snapshot.pythonStatus(), null,
+                                "UNAVAILABLE".equals(snapshot.pythonStatus())
+                                        ? "EXECUTOR_UNAVAILABLE" : null),
+                        new ServiceStatus("llm", snapshot.providerStatus(), snapshot.model(),
+                                snapshot.errorCode()),
+                        new ServiceStatus("kafka", kafkaHealth.check(), null, null)));
     }
 
     record ServiceStatusResponse(
             String schemaVersion, Instant checkedAt, List<ServiceStatus> services) {
     }
 
-    record ServiceStatus(String service, String status) {
+    record ServiceStatus(String service, String status, String model, String errorCode) {
     }
 }

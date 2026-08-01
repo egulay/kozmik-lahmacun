@@ -3,6 +3,9 @@
 .idea/
 *.iml
 
+# Local secret-export helpers must never be committed
+scripts/add-openai-api-key.sh
+
 # Private implementation handoff; deliberately excluded from public repositories
 analysis/
 

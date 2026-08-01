@@ -86,6 +86,8 @@ class ChatProvider(Protocol):
     async def complete_json(self, system_prompt: str, user_prompt: str) -> dict: ...
     async def health(self) -> bool: ...
 
+    async def ensure_ready(self) -> None: ...
+
 
 class OpenAiCompatibleProvider:
     name = "openai-compatible"
@@ -104,8 +106,19 @@ class OpenAiCompatibleProvider:
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
 
+    def _sampling_parameters(self) -> dict[str, int]:
+        # Local OpenAI-compatible models accept an explicit deterministic
+        # temperature. OpenAI reasoning models control sampling internally and
+        # reject non-default temperature values with HTTP 400.
+        return {"temperature": 0} if self.name == "lm-studio" else {}
+
     async def stream(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
-        payload = {"model": self.model, "messages": messages, "stream": True, "temperature": 0}
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+            **self._sampling_parameters(),
+        }
         emitted = False
         for attempt in range(self.config.max_retries + 1):
             try:
@@ -150,7 +163,7 @@ class OpenAiCompatibleProvider:
                 {"role": "user", "content": prompt},
             ],
             "stream": False,
-            "temperature": 0,
+            **self._sampling_parameters(),
         }
         for attempt in range(self.config.max_retries + 1):
             try:
@@ -181,7 +194,7 @@ class OpenAiCompatibleProvider:
                 {"role": "user", "content": user_prompt},
             ],
             "stream": False,
-            "temperature": 0,
+            **self._sampling_parameters(),
         }
         if self.name != "lm-studio":
             payload["response_format"] = {"type": "json_object"}
@@ -240,6 +253,38 @@ class OpenAiCompatibleProvider:
                     for item in payload.get("data", [])
                     if isinstance(item, dict)
                 }
+        except httpx.HTTPStatusError as exception:
+            status = exception.response.status_code
+            if status == 401:
+                code = "LLM_PROVIDER_AUTHENTICATION_FAILED"
+                message = (
+                    "The configured LLM provider rejected authentication. For an "
+                    "OpenAI-compatible provider, create a valid Platform API key, enable "
+                    "API billing, and export OPENAI_COMPATIBLE_API_KEY in the shell that "
+                    "runs start-all.sh. ChatGPT subscriptions do not provide API billing."
+                )
+            elif status == 403:
+                code = "LLM_PROVIDER_ACCESS_DENIED"
+                message = (
+                    "The configured LLM provider authenticated the request but denied access. "
+                    "Verify the API project, organization permissions, and selected model."
+                )
+            elif status == 429:
+                code = "LLM_PROVIDER_QUOTA_EXCEEDED"
+                message = (
+                    "The configured LLM provider rejected the health check because its quota "
+                    "or rate limit was exceeded. Verify API billing and project limits."
+                )
+            else:
+                code = "LLM_PROVIDER_UNAVAILABLE"
+                message = (
+                    f"The configured LLM provider health check failed with HTTP {status}."
+                )
+            raise ProviderError(
+                code,
+                retryable=status == 429 or status >= 500,
+                message=message,
+            ) from exception
         except (httpx.HTTPError, ValueError, AttributeError) as exception:
             raise ProviderError(
                 "LLM_PROVIDER_UNAVAILABLE",
@@ -410,6 +455,9 @@ class DeterministicMockProvider:
 
     async def health(self) -> bool:
         return True
+
+    async def ensure_ready(self) -> None:
+        return None
 
 
 class ProviderRegistry:

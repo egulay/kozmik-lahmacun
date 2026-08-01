@@ -3,6 +3,8 @@ from decimal import Decimal
 from datetime import datetime, timezone
 from uuid import uuid4
 
+import pytest
+
 from kozmik_executor.execution.explanation import ResultExplainer, SummaryFacts
 from kozmik_executor.execution.models import ExecutionCommand
 from kozmik_executor.chat.providers import ProviderError
@@ -85,7 +87,10 @@ class EmptyFactsProvider(RecordingProvider):
         if self.calls == 1:
             yield "This decision summary does not contain any governed facts to analyze."
         else:
-            yield "Marmara leads the regional comparison. The result covers only the selected scope."
+            yield (
+                "Marmara leads the regional comparison, while Ege has the lowest result. "
+                "The result covers only the selected scope."
+            )
 
 
 class TurkishEmptyFactsProvider(RecordingProvider):
@@ -119,7 +124,8 @@ class MissingMeasuresProvider(RecordingProvider):
         else:
             yield (
                 "Marmara leads with total sales of 6,525,519.3 and an average discount of "
-                "zero. The comparison covers only the selected sales scope."
+                "zero, while Ege has the lowest total sales. The comparison covers only the "
+                "selected sales scope."
             )
 
 
@@ -314,6 +320,59 @@ def test_grouped_report_passes_only_bounded_aggregate_breakdown_and_repairs_empt
     assert provider.calls == 2
 
 
+def test_report_comparison_contains_complete_business_range() -> None:
+    grouped_result = result()
+    grouped_result["preview"] = {
+        "columns": [],
+        "rows": [
+            {"region": "Marmara", "total_sales": 1200, "avg_discount": 0.02},
+            {"region": "Ege", "total_sales": 900, "avg_discount": 0.03},
+            {"region": "Karadeniz", "total_sales": 600, "avg_discount": 0.04},
+        ],
+        "limit": 10,
+        "truncated": False,
+    }
+
+    facts = ResultExplainer().build_facts(grouped_report_command(), grouped_result)
+    comparison = next(
+        item for item in facts.report_comparisons if item.measure == "total_sales"
+    )
+
+    assert comparison.highest_dimensions == {"region": "Marmara"}
+    assert comparison.lowest_dimensions == {"region": "Karadeniz"}
+    assert comparison.highest_value == 1200
+    assert comparison.lowest_value == 600
+    assert comparison.absolute_difference == 600
+    assert comparison.percentage_difference == 100
+    assert comparison.highest_share_percent == pytest.approx(44.4444, rel=1e-4)
+    grounded = ResultExplainer._grounded_management_fallback(facts)
+    assert "Marmara" in grounded
+    assert "Karadeniz" in grounded
+    assert "highest at 1,200" in grounded
+    assert "lowest at 600" in grounded
+
+
+def test_report_comparison_requires_both_strongest_and_weakest_group() -> None:
+    facts = SummaryFacts.model_validate({
+        "executionType": "REPORT", "language": "en", "rowCount": 3,
+        "facts": [], "warnings": [],
+        "reportComparisons": [{
+            "measure": "total_sales",
+            "highestDimensions": {"region": "Marmara"}, "highestValue": 1200,
+            "lowestDimensions": {"region": "Karadeniz"}, "lowestValue": 600,
+            "absoluteDifference": 600, "percentageDifference": 100,
+            "highestSharePercent": 44.44, "groupCount": 3,
+        }],
+    })
+
+    assert ResultExplainer._report_comparison_violations(
+        "Marmara generated the highest result.", facts
+    ) == ["identify the lowest group from reportComparisons"]
+    assert ResultExplainer._report_comparison_violations(
+        "Marmara was highest and Karadeniz was lowest.", facts
+    ) == []
+
+
 def test_turkish_empty_facts_claim_is_replaced_with_grounded_breakdown():
     provider = TurkishEmptyFactsProvider()
     grouped_result = result()
@@ -402,6 +461,7 @@ def test_grounded_summary_recommends_only_calculated_best_scenario():
     assert "Under the tested assumptions" in summary
     assert "unit price was relatively increased by 5%" in summary
     assert "+4.20%" in summary
+    assert "-4.10%" in summary
     assert "limited, controlled business test" in summary
     assert "demand, cost, profit" not in summary
     assert "competitor reactions" not in summary

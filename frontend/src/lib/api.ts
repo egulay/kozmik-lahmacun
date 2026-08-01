@@ -101,7 +101,12 @@ export const api = {
   serviceStatuses: () =>
     request<{
       checkedAt: string;
-      services: Array<{ service: 'backend' | 'executor' | 'llm' | 'kafka'; status: string }>;
+      services: Array<{
+        service: 'backend' | 'executor' | 'llm' | 'kafka';
+        status: string;
+        model: string | null;
+        errorCode: string | null;
+      }>;
     }>('/api/health/services'),
   threadPage: async (page = 0, size = 20): Promise<PageResponse<ChatThread>> => {
     const response = await request<{

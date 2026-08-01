@@ -23,7 +23,7 @@ public class ProviderHealthService {
 
     public Snapshot check() {
         if (internalApiKey.isBlank()) {
-            return new Snapshot("UNKNOWN", "UNKNOWN", null);
+            return new Snapshot("UNKNOWN", "UNKNOWN", null, null, null);
         }
         try {
             val response = restClient.get()
@@ -32,14 +32,18 @@ public class ProviderHealthService {
                     .retrieve()
                     .body(Map.class);
             if (response == null) {
-                return new Snapshot("UNAVAILABLE", "UNKNOWN", null);
+                return new Snapshot("UNAVAILABLE", "UNKNOWN", null, null,
+                        "EXECUTOR_UNAVAILABLE");
             }
             return new Snapshot(
                     safe(response.get("status")),
                     safe(response.get("providerStatus")),
-                    response.get("provider") == null ? null : safe(response.get("provider")));
+                    nullable(response.get("provider")),
+                    nullable(response.get("model")),
+                    nullable(response.get("errorCode")));
         } catch (RuntimeException unavailable) {
-            return new Snapshot("UNAVAILABLE", "UNKNOWN", null);
+            return new Snapshot("UNAVAILABLE", "UNKNOWN", null, null,
+                    "EXECUTOR_UNAVAILABLE");
         }
     }
 
@@ -47,6 +51,15 @@ public class ProviderHealthService {
         return value == null ? "UNKNOWN" : value.toString();
     }
 
-    public record Snapshot(String pythonStatus, String providerStatus, String provider) {
+    private String nullable(Object value) {
+        return value == null ? null : value.toString();
+    }
+
+    public record Snapshot(
+            String pythonStatus,
+            String providerStatus,
+            String provider,
+            String model,
+            String errorCode) {
     }
 }

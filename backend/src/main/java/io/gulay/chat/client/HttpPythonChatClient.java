@@ -28,6 +28,10 @@ public class HttpPythonChatClient implements PythonChatClient {
     private String baseUrl;
     @Value("${kozmik.security.internal-api-key:}")
     private String internalApiKey;
+    @Value("${kozmik.python.chat-stream-timeout-seconds:240}")
+    private long chatStreamTimeoutSeconds;
+    @Value("${kozmik.python.classification-timeout-seconds:240}")
+    private long classificationTimeoutSeconds;
 
     @Override
     public void stream(PythonChatContracts.StreamRequest request,
@@ -40,7 +44,7 @@ public class HttpPythonChatClient implements PythonChatClient {
                     .header("Accept", "application/x-ndjson")
                     .header("X-Internal-API-Key", internalApiKey)
                     .header("X-Correlation-ID", request.correlationId())
-                    .timeout(Duration.ofMinutes(2))
+                    .timeout(Duration.ofSeconds(chatStreamTimeoutSeconds))
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build();
             val response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofLines());
@@ -71,7 +75,7 @@ public class HttpPythonChatClient implements PythonChatClient {
                     .header("Accept", "application/json")
                     .header("X-Internal-API-Key", internalApiKey)
                     .header("X-Correlation-ID", request.correlationId())
-                    .timeout(Duration.ofSeconds(30))
+                    .timeout(Duration.ofSeconds(classificationTimeoutSeconds))
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build();
             val response = httpClient.send(

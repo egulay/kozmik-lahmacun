@@ -14,4 +14,6 @@ def test_internal_health_is_available(monkeypatch) -> None:
         "status": "AVAILABLE",
         "providerStatus": "AVAILABLE",
         "provider": "deterministic-mock",
+        "model": "mock-v1",
+        "errorCode": None,
     }

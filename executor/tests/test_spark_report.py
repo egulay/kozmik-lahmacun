@@ -66,8 +66,17 @@ def test_trusted_registry_executes_deterministic_dataset_and_writes_parquet(tmp_
     assert result["preview"]["truncated"] is True
     assert result["kpis"] == []
     assert result["charts"][0]["type"] == "BAR"
+    assert result["charts"][0]["title"] == "Toplam satış"
+    assert result["charts"][0]["categoryLabel"] == "Bölge"
     assert result["charts"][0]["categories"] == ["TR", "DE"]
     assert result["charts"][0]["series"][0]["data"] == [30, 7]
+    comparison = result["summaryFacts"]["reportComparisons"][0]
+    assert comparison["highestDimensions"] == {"region": "TR"}
+    assert comparison["lowestDimensions"] == {"region": "DE"}
+    assert comparison["highestValue"] == 30
+    assert comparison["lowestValue"] == 7
+    assert comparison["absoluteDifference"] == 23
+    assert comparison["groupCount"] == 2
     assert minio.upload[0] == "results"
     assert minio.upload[1].startswith(f"executions/{execution_id}/")
     assert shutil.which("java") is not None
@@ -160,6 +169,9 @@ def test_grouped_bar_chart_uses_second_grouping_dimension_as_series():
     chart = SparkReportExecutor._charts(order, rows)[0]
 
     assert chart["categories"] == ["Ege", "Marmara"]
+    assert chart["title"] == "Total Net Sales"
+    assert chart["categoryLabel"] == "Region"
+    assert chart["seriesLabel"] == "Channel"
     assert chart["seriesField"] == "channel"
     assert chart["series"] == [
         {"name": "WEB", "data": [10, 30]},

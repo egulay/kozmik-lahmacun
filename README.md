@@ -762,6 +762,8 @@ Defaults and binding names live in:
 
 - [`.env.example`](.env.example) for Compose, ports, provider settings,
   execution limits and local paths;
+- [`executor/config/spark.yml`](executor/config/spark.yml) for the Spark master,
+  Hive support and operator-owned `spark.*` runtime properties;
 - [`backend/src/main/resources/application.yml`](backend/src/main/resources/application.yml)
   for Java configuration bindings and defaults;
 - [`infrastructure/compose.yaml`](infrastructure/compose.yaml) for the local
@@ -773,10 +775,11 @@ Defaults and binding names live in:
 placeholders with generated values. Non-secret runtime changes—Kafka address
 and topic names, Redis host/port, service ports, Spark concurrency, execution
 timeouts, preview limits, retention periods, log roots, LLM endpoint/model and
-SMTP transport behavior—are supplied through environment variables. Java
-maps them from `application.yml`; Python loads Java-owned effective execution
+SMTP transport behavior—are supplied through environment variables. Structured
+Spark runtime policy is supplied through `executor/config/spark.yml`. Java maps
+its settings from `application.yml`; Python loads Java-owned effective execution
 and LLM configuration during startup and reads its worker-specific environment
-bindings.
+and Spark YAML bindings.
 
 Typical bindings include:
 
@@ -784,16 +787,101 @@ Typical bindings include:
 |---|---|
 | Kafka | `KAFKA_PORT`, `KAFKA_BOOTSTRAP_SERVERS`, topic variables, consumer group and publish retry limits |
 | Redis | `REDIS_HOST`, `REDIS_PORT`, `REDIS_TIMEOUT` |
-| Spark/execution | `SPARK_MAX_CONCURRENT_JOBS`, `SPARK_SCHEDULER_MODE`, `EXECUTION_TIMEOUT_SECONDS`, `EXECUTION_MAX_PREVIEW_ROWS` |
+| Spark/execution | `executor/config/spark.yml` contains the operator-owned Spark master, Hive switch, and `spark.*` properties. `SPARK_MASTER`, resource-related `SPARK_*` variables, `SPARK_MAX_CONCURRENT_JOBS`, `EXECUTION_TIMEOUT_SECONDS`, and `EXECUTION_MAX_PREVIEW_ROWS` provide deployment overrides. |
 | LLM | `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_MODEL`, timeouts, retries, context bounds and `LLM_MAX_CONCURRENT_STRUCTURED_REQUESTS` |
 | MinIO | Endpoint, API/console ports, secure transport flag and scoped credential names |
 | Retention | Chat, execution, preview and artifact periods plus scheduler expressions |
 | Logging | `JAVA_LOG_DIR`, `PYTHON_LOG_DIR`, levels, history and size cap |
 | SMTP | Host, port, sender, authentication, TLS/SSL and credential fields |
 
-Runtime-bound configuration is loaded at service startup. A changed `.env` or
-deployment secret source takes effect when the affected service or Compose
-stack is restarted.
+Runtime-bound configuration is loaded at service startup. A changed `.env`,
+Spark YAML or deployment secret source takes effect when the affected service
+or Compose stack is restarted.
+
+### Spark runtime and cluster deployment
+
+The executor does not hard-code a local Spark master. Its primary Spark policy
+is [`executor/config/spark.yml`](executor/config/spark.yml):
+
+```yaml
+master:
+enable_hive_support: false
+
+spark_config:
+  spark.scheduler.mode: "FAIR"
+  spark.driver.maxResultSize: "512m"
+  spark.executor.memory: "4g"
+  spark.executor.cores: 2
+  spark.executor.instances: 2
+  spark.sql.shuffle.partitions: 16
+  spark.dynamicAllocation.enabled: "false"
+```
+
+An empty `master` preserves the master supplied by the Spark launch
+environment. In the clean local demo, PySpark resolves this to `local[*]`.
+Cluster deployments can set the master in the YAML file:
+
+```yaml
+# Spark Standalone
+master: "spark://spark-master.internal:7077"
+
+# YARN
+master: "yarn"
+
+# Kubernetes client mode
+master: "k8s://https://kubernetes.default.svc"
+```
+
+`SPARK_CONFIG_FILE` can select a deployment-specific, read-only YAML file.
+Allow-listed environment variables such as `SPARK_MASTER`,
+`SPARK_EXECUTOR_MEMORY`, `SPARK_EXECUTOR_CORES`,
+`SPARK_EXECUTOR_INSTANCES` and the `SPARK_DYNAMIC_ALLOCATION_*` family override
+the corresponding YAML values. This supports immutable images with
+environment-specific ConfigMaps or mounted files. Configuration precedence is:
+
+```text
+operator-owned spark.yml -> allow-listed SPARK_* deployment overrides
+```
+
+The loader accepts only bounded scalar `spark.*` properties and validates
+memory formats, positive resource counts and dynamic-allocation ranges before
+creating the Spark session. Execution-order JSON and LLM output cannot modify
+the master, enable Hive, change resources or inject Spark configuration.
+Credentials, private keys and tokens do not belong in this YAML file; they are
+provided by Vault or the cluster's external identity mechanism.
+
+Fixed allocation uses `spark.executor.instances`, `spark.executor.cores` and
+`spark.executor.memory`. A cluster with the required shuffle support can use
+dynamic allocation instead:
+
+```yaml
+spark_config:
+  spark.executor.memory: "8g"
+  spark.executor.cores: 4
+  spark.dynamicAllocation.enabled: "true"
+  spark.dynamicAllocation.minExecutors: 2
+  spark.dynamicAllocation.initialExecutors: 5
+  spark.dynamicAllocation.maxExecutors: 40
+```
+
+`SPARK_MAX_CONCURRENT_JOBS` is separate from Spark executor allocation. It is
+the maximum number of Kozmik execution commands coordinated concurrently by
+one Python executor process. Spark executor counts describe the shared Spark
+application's compute pool, while the cluster scheduler and queue policies
+remain the final capacity boundary. Commands beyond the Kozmik limit remain in
+Kafka until executor capacity becomes available.
+
+The current runtime uses Spark client mode: the Python executor process owns
+the shared Spark driver and submits governed job groups to the configured
+master. A cluster deployment must additionally supply normal platform
+prerequisites such as network reachability, Spark/Hadoop client configuration,
+TLS or Kerberos material, connector JARs, worker-accessible Python dependencies
+and storage endpoints reachable from every worker. Independent cluster-mode
+applications submitted per execution are not currently implemented.
+
+Governed analytical storage remains Parquet. Iceberg configuration examples
+are intentionally not activated until an Iceberg catalog, ingestion and
+artifact adapter is implemented end to end.
 
 ### Vault secret model
 

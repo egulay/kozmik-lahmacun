@@ -2,12 +2,15 @@ import asyncio
 import os
 import tempfile
 from collections.abc import Callable
+from decimal import Decimal
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid5
 
 from minio import Minio
 from pyspark.sql import DataFrame, SparkSession, functions as spark_fn
+from pyspark.sql.types import NumericType
 
 from kozmik_executor.planning.models import (
     AggregationFunction,
@@ -19,6 +22,7 @@ from kozmik_executor.planning.models import (
     TemporalGranularity,
 )
 from kozmik_executor.spark_runtime import run_spark_operation
+from kozmik_executor.spark_session import build_spark_session
 
 ARTIFACT_NAMESPACE = UUID("19af38da-8525-4e7f-986f-9cbb4fcc9ab8")
 
@@ -108,11 +112,7 @@ TEMPORAL_GROUP_REGISTRY: dict[TemporalGranularity, Callable] = {
 
 class SparkReportExecutor:
     def __init__(self, spark: SparkSession | None = None, minio: Minio | None = None) -> None:
-        self.spark = spark or (
-            SparkSession.builder.appName("kozmik-report-worker")
-            .config("spark.scheduler.mode", os.getenv("SPARK_SCHEDULER_MODE", "FAIR"))
-            .getOrCreate()
-        )
+        self.spark = spark or build_spark_session("kozmik-report-worker")
         self.minio = minio or Minio(
             os.getenv("MINIO_ENDPOINT", "localhost:9000"),
             access_key=os.getenv("MINIO_ACCESS_KEY", ""),
@@ -166,6 +166,7 @@ class SparkReportExecutor:
             raise asyncio.CancelledError
         self.spark.sparkContext.setJobGroup(str(execution_id), "Kozmik governed report", True)
         row_count = transformed.count()
+        summary_comparisons = self._summary_comparisons(transformed, order, row_count)
         preview_limit = order.constraints.max_preview_rows
         preview_rows = [row.asDict(recursive=True) for row in transformed.limit(preview_limit).collect()]
         chart_rows = preview_rows
@@ -193,6 +194,7 @@ class SparkReportExecutor:
                         "truncated": row_count > preview_limit},
             "kpis": self._kpis(order, preview_rows),
             "charts": self._charts(order, chart_rows),
+            "summaryFacts": {"reportComparisons": summary_comparisons},
             "warnings": [],
             "artifact": {"artifactId": str(artifact_id), "format": "PARQUET",
                          "bucket": "results", "objectKey": object_key, "sizeBytes": size},
@@ -289,6 +291,97 @@ class SparkReportExecutor:
         ]
 
     @staticmethod
+    def _summary_comparisons(
+        frame: DataFrame, order: ReportOrder, row_count: int,
+    ) -> list[dict[str, Any]]:
+        """Calculate complete grouped-result extrema without collecting result rows."""
+        if row_count < 2 or not order.payload.aggregations:
+            return []
+        temporal_aliases = {item.alias for item in order.payload.temporal_group_by}
+        dimensions = [
+            item.alias or item.column
+            for item in order.payload.select
+            if item.column in order.payload.group_by
+            or (item.alias or item.column) in temporal_aliases
+        ]
+        if not dimensions:
+            return []
+        numeric_fields = {
+            field.name for field in frame.schema.fields
+            if isinstance(field.dataType, NumericType)
+        }
+        measures = [
+            item.alias for item in order.payload.aggregations
+            if item.alias in numeric_fields
+        ][:5]
+        if not measures:
+            return []
+        dimension_struct = spark_fn.struct(
+            *(spark_fn.col(name).alias(name) for name in dimensions)
+        )
+        expressions = []
+        for measure in measures:
+            column = spark_fn.col(measure)
+            expressions.extend([
+                spark_fn.max(column).alias(f"{measure}__max"),
+                spark_fn.min(column).alias(f"{measure}__min"),
+                spark_fn.sum(column).alias(f"{measure}__sum"),
+                spark_fn.max_by(dimension_struct, column).alias(f"{measure}__max_dimensions"),
+                spark_fn.min_by(dimension_struct, column).alias(f"{measure}__min_dimensions"),
+            ])
+        aggregate = frame.agg(*expressions).first().asDict(recursive=True)
+        comparisons = []
+        for measure in measures:
+            highest = aggregate.get(f"{measure}__max")
+            lowest = aggregate.get(f"{measure}__min")
+            total = aggregate.get(f"{measure}__sum")
+            if not isinstance(highest, (int, float, Decimal)) or not isinstance(
+                lowest, (int, float, Decimal)
+            ):
+                continue
+            highest_number = float(highest)
+            lowest_number = float(lowest)
+            difference = highest_number - lowest_number
+            percentage = (
+                difference / abs(lowest_number) * 100
+                if lowest_number != 0 else None
+            )
+            share = (
+                highest_number / float(total) * 100
+                if isinstance(total, (int, float, Decimal))
+                and float(total) > 0 and lowest_number >= 0 else None
+            )
+            def safe_dimensions(value: object) -> dict[str, Any]:
+                if not isinstance(value, dict):
+                    return {}
+                return {
+                    key: (
+                        item.isoformat() if isinstance(item, (date, datetime))
+                        else str(item) if isinstance(item, Decimal)
+                        else item
+                    )
+                    for key, item in value.items()
+                    if isinstance(item, (str, int, float, bool, Decimal, date, datetime))
+                    or item is None
+                }
+
+            comparisons.append({
+                "measure": measure,
+                "highestDimensions": safe_dimensions(aggregate.get(
+                    f"{measure}__max_dimensions")),
+                "highestValue": highest_number,
+                "lowestDimensions": safe_dimensions(aggregate.get(
+                    f"{measure}__min_dimensions")),
+                "lowestValue": lowest_number,
+                "absoluteDifference": difference,
+                "percentageDifference": percentage,
+                "highestSharePercent": min(100.0, max(0.0, share))
+                if share is not None else None,
+                "groupCount": row_count,
+            })
+        return comparisons
+
+    @staticmethod
     def _display_labels(order: ReportOrder) -> dict[str, str]:
         labels = {
             item.alias or item.column: item.display_label
@@ -310,6 +403,7 @@ class SparkReportExecutor:
     @staticmethod
     def _charts(order: ReportOrder, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         charts = []
+        display_labels = SparkReportExecutor._display_labels(order)
         grouped_dimensions = [
             *order.payload.group_by,
             *(item.alias for item in order.payload.temporal_group_by),
@@ -365,10 +459,23 @@ class SparkReportExecutor:
             charts.append({
                 "chartId": f"chart-{index + 1}",
                 "type": hint.chart_type,
-                "titleKey": "result.chart.report",
+                "title": display_labels.get(value, SparkReportExecutor._fallback_label(value)),
                 "categoryField": category,
+                "categoryLabel": display_labels.get(
+                    category, SparkReportExecutor._fallback_label(category)
+                ),
                 "seriesField": series_field,
+                "seriesLabel": (
+                    display_labels.get(
+                        series_field, SparkReportExecutor._fallback_label(series_field)
+                    )
+                    if series_field else None
+                ),
                 "categories": categories,
                 "series": series,
             })
         return charts
+
+    @staticmethod
+    def _fallback_label(field: str) -> str:
+        return field.replace("_", " ").strip().title()

@@ -27,16 +27,27 @@
   onMount(() => {
     let observer: ResizeObserver | undefined;
     let themeObserver: MutationObserver | undefined;
+    let printObserver: MutationObserver | undefined;
     let disposed = false;
+    const resizeChart = () => {
+      if (container.clientWidth <= 0) return;
+      const height = document.body.classList.contains('pdf-exporting') ? 180 : 300;
+      chart?.resize({ width: container.clientWidth, height });
+    };
+    const prepareForPrint = () => {
+      chart?.setOption(chartOption(), true);
+      chart?.resize({ width: container.getBoundingClientRect().width, height: 180 });
+    };
+    const restoreAfterPrint = () => {
+      chart?.resize({ width: container.getBoundingClientRect().width, height: 300 });
+    };
     void import('echarts').then((echarts) => {
       if (disposed) return;
       chart = echarts.init(container, undefined, { renderer: 'svg', height: 300 });
       chart.setOption(chartOption(), true);
       renderError = false;
       observer = new ResizeObserver(() => {
-        if (container.clientWidth > 0) {
-          chart?.resize({ width: container.clientWidth, height: 300 });
-        }
+        resizeChart();
       });
       observer.observe(container);
       themeObserver = new MutationObserver(() => {
@@ -46,6 +57,16 @@
         attributes: true,
         attributeFilter: ['class']
       });
+      printObserver = new MutationObserver(() => {
+        chart?.setOption(chartOption(), true);
+        requestAnimationFrame(resizeChart);
+      });
+      printObserver.observe(document.body, {
+        attributes: true,
+        attributeFilter: ['class']
+      });
+      window.addEventListener('beforeprint', prepareForPrint);
+      window.addEventListener('afterprint', restoreAfterPrint);
     }).catch((error: unknown) => {
       console.error('ECharts initialization failed', error);
       renderError = true;
@@ -55,6 +76,9 @@
       if (frame !== undefined) cancelAnimationFrame(frame);
       observer?.disconnect();
       themeObserver?.disconnect();
+      printObserver?.disconnect();
+      window.removeEventListener('beforeprint', prepareForPrint);
+      window.removeEventListener('afterprint', restoreAfterPrint);
       chart?.dispose();
     };
   });
@@ -91,6 +115,14 @@
         ? [configured.series as Record<string, unknown>]
         : [];
     const containsPie = configuredSeries.some((item) => item.type === 'pie');
+    const barSeriesCount = configuredSeries.filter((item) => item.type === 'bar').length;
+    const themedSeries = configuredSeries.map((series) => series.type === 'bar'
+      ? {
+          ...series,
+          colorBy: series.colorBy ?? (barSeriesCount === 1 ? 'data' : 'series')
+        }
+      : series
+    );
     const configuredTooltip = configured.tooltip && typeof configured.tooltip === 'object'
       ? configured.tooltip as Record<string, unknown>
       : {};
@@ -103,6 +135,7 @@
       },
       animation: false,
       ...option,
+      series: themedSeries as EChartsOption['series'],
       xAxis: themedAxes(
         configured.xAxis, foreground, mutedForeground, border
       ) as EChartsOption['xAxis'],

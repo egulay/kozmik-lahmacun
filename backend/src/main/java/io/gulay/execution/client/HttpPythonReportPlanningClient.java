@@ -29,6 +29,8 @@ public class HttpPythonReportPlanningClient implements PythonReportPlanningClien
     private String baseUrl;
     @Value("${kozmik.security.internal-api-key:}")
     private String internalApiKey;
+    @Value("${kozmik.python.planning-timeout-seconds:660}")
+    private long planningTimeoutSeconds;
 
     @Override
     public JsonNode plan(JsonNode request) {
@@ -47,7 +49,7 @@ public class HttpPythonReportPlanningClient implements PythonReportPlanningClien
                     .header("Content-Type", "application/json")
                     .header("X-Internal-API-Key", internalApiKey)
                     .header("X-Correlation-ID", safeText(request.path("correlationId")))
-                    .timeout(Duration.ofSeconds(90))
+                    .timeout(Duration.ofSeconds(planningTimeoutSeconds))
                     .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(request)))
                     .build();
             val response = httpClient.send(call, HttpResponse.BodyHandlers.ofString());

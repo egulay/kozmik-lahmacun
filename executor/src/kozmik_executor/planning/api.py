@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import secrets
+import unicodedata
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import ValidationError
@@ -32,14 +33,17 @@ def _authenticate(value: str | None) -> None:
         raise HTTPException(status_code=401, detail="internal authentication required")
 
 
-def _enforce_preview_limit(raw: object, max_preview_rows: int) -> None:
-    """Keep the browser-preview policy under control-plane ownership."""
+def _enforce_execution_constraints(
+    raw: object, max_preview_rows: int, timeout_seconds: int,
+) -> None:
+    """Keep operational execution limits under control-plane ownership."""
     if not isinstance(raw, dict):
         return
     constraints = raw.get("constraints")
     if not isinstance(constraints, dict):
         return
     constraints["maxPreviewRows"] = max(1, min(max_preview_rows, 100))
+    constraints["timeoutSeconds"] = max(1, min(timeout_seconds, 21_600))
 
 
 def _report_issues(exception: ValidationError | PlanningValidationError) -> list[dict]:
@@ -57,6 +61,7 @@ def _report_issues(exception: ValidationError | PlanningValidationError) -> list
 
 async def _generate_report_order(
     provider, request: ReportPlanningRequest, max_preview_rows: int = 100,
+    timeout_seconds: int = 7200,
 ) -> ReportOrder:
     base_prompt = build_prompt(request)
     prompt = base_prompt
@@ -64,7 +69,8 @@ async def _generate_report_order(
     for attempt in range(3):
         raw = await provider.complete_json(SYSTEM_PROMPT, prompt)
         try:
-            _enforce_preview_limit(raw, max_preview_rows)
+            _enforce_execution_constraints(raw, max_preview_rows, timeout_seconds)
+            _normalize_order_identifiers(raw)
             _normalize_between_filters(raw)
             _normalize_explicit_temporal_grouping(raw)
             _normalize_implicit_temporal_grouping(raw, request)
@@ -91,6 +97,103 @@ async def _generate_report_order(
     if last_exception is None:
         raise RuntimeError("report generation ended without an order")
     raise last_exception
+
+
+def _normalize_order_identifiers(raw: object) -> None:
+    """Separate human labels from safe internal aliases without changing source columns."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("payload"), dict):
+        return
+    payload = raw["payload"]
+    valid = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+    translation = str.maketrans({
+        "ç": "c", "Ç": "C", "ğ": "g", "Ğ": "G", "ı": "i", "İ": "I",
+        "ö": "o", "Ö": "O", "ş": "s", "Ş": "S", "ü": "u", "Ü": "U",
+    })
+    replacements: dict[str, str] = {}
+    used: set[str] = set()
+
+    def safe_identifier(value: str) -> str:
+        translated = unicodedata.normalize("NFKD", value.translate(translation))
+        ascii_value = "".join(
+            character for character in translated if not unicodedata.combining(character)
+        )
+        normalized = re.sub(r"[^A-Za-z0-9_]+", "_", ascii_value).strip("_").lower()
+        if not normalized:
+            normalized = "field"
+        if normalized[0].isdigit():
+            normalized = f"field_{normalized}"
+        return normalized[:100]
+
+    collections = (
+        payload.get("select"), payload.get("aggregations"),
+        payload.get("temporalGroupBy"),
+    )
+    for collection in collections:
+        if isinstance(collection, list):
+            used.update(
+                item["alias"] for item in collection
+                if isinstance(item, dict)
+                and isinstance(item.get("alias"), str)
+                and valid.fullmatch(item["alias"])
+            )
+    changed = 0
+    for collection in collections:
+        if not isinstance(collection, list):
+            continue
+        for item in collection:
+            if not isinstance(item, dict):
+                continue
+            alias = item.get("alias")
+            if not isinstance(alias, str):
+                continue
+            if valid.fullmatch(alias):
+                continue
+            normalized = replacements.get(alias)
+            if normalized is None:
+                base = safe_identifier(alias)
+                normalized = base
+                suffix = 2
+                while normalized in used:
+                    normalized = f"{base[:94]}_{suffix}"
+                    suffix += 1
+                replacements[alias] = normalized
+                used.add(normalized)
+            item["alias"] = normalized
+            if not item.get("displayLabel"):
+                item["displayLabel"] = alias.replace("_", " ").strip()
+            changed += 1
+
+    if not replacements:
+        return
+    for field in ("groupBy",):
+        values = payload.get(field)
+        if isinstance(values, list):
+            payload[field] = [replacements.get(value, value) for value in values]
+    for field in ("orderBy", "chartHints"):
+        values = payload.get(field)
+        if not isinstance(values, list):
+            continue
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            for key in ("column", "categoryColumn", "valueColumn"):
+                value = item.get(key)
+                if isinstance(value, str):
+                    item[key] = replacements.get(value, value)
+
+    def rewrite_having(expression: object) -> None:
+        if not isinstance(expression, dict):
+            return
+        column = expression.get("column")
+        if isinstance(column, str):
+            expression["column"] = replacements.get(column, column)
+        children = expression.get("children")
+        if isinstance(children, list):
+            for child in children:
+                rewrite_having(child)
+
+    rewrite_having(payload.get("having"))
+    logger.info("report_order_aliases_normalized count=%s", changed)
 
 
 def _normalize_between_filters(raw: object) -> None:
@@ -336,6 +439,7 @@ def _normalize_group_by_aliases(raw: object) -> None:
 
 async def _generate_ml_order(
     provider, request: ReportPlanningRequest, max_preview_rows: int = 100,
+    timeout_seconds: int = 7200,
 ) -> MlOrder:
     registry = {
         f"{problem_type}:{algorithm}": {
@@ -359,7 +463,7 @@ async def _generate_ml_order(
     for attempt in range(3):
         raw = await provider.complete_json(ML_SYSTEM_PROMPT, prompt)
         try:
-            _enforce_preview_limit(raw, max_preview_rows)
+            _enforce_execution_constraints(raw, max_preview_rows, timeout_seconds)
             _remove_unrequested_what_if(raw, request.user_request)
             _remove_implicit_what_if_baseline(raw)
             _normalize_ml_features(raw, request)
@@ -470,6 +574,11 @@ def _normalize_ml_features(raw: object, request: ReportPlanningRequest) -> None:
         return
     features = payload.get("featureColumns")
     target = payload.get("targetColumn")
+    derivation = payload.get("binaryTargetDerivation")
+    derived_source = (
+        derivation.get("sourceColumn")
+        if isinstance(derivation, dict) else None
+    )
     if not isinstance(features, list):
         return
     supported = {
@@ -483,6 +592,7 @@ def _normalize_ml_features(raw: object, request: ReportPlanningRequest) -> None:
             isinstance(value, str)
             and value in supported
             and value != target
+            and value != derived_source
             and value not in normalized
         ):
             normalized.append(value)
@@ -539,8 +649,12 @@ async def plan_report(
     try:
         effective = await configuration_client.load()
         provider = provider_registry.resolve(effective.llm)
-        max_preview_rows = int((effective.execution or {}).get("maxPreviewRows", 100))
-        order = await _generate_report_order(provider, request, max_preview_rows)
+        execution = effective.execution or {}
+        max_preview_rows = int(execution.get("maxPreviewRows", 100))
+        timeout_seconds = int(execution.get("timeoutSeconds", 7200))
+        order = await _generate_report_order(
+            provider, request, max_preview_rows, timeout_seconds
+        )
         return ReportPlanningResponse(
             request_id=request.request_id, correlation_id=request.correlation_id,
             provider=provider.name, model=provider.model, order=order,
@@ -574,8 +688,12 @@ async def plan_ml(
     try:
         effective = await configuration_client.load()
         provider = provider_registry.resolve(effective.llm)
-        max_preview_rows = int((effective.execution or {}).get("maxPreviewRows", 100))
-        order = await _generate_ml_order(provider, request, max_preview_rows)
+        execution = effective.execution or {}
+        max_preview_rows = int(execution.get("maxPreviewRows", 100))
+        timeout_seconds = int(execution.get("timeoutSeconds", 7200))
+        order = await _generate_ml_order(
+            provider, request, max_preview_rows, timeout_seconds
+        )
         return MlPlanningResponse(
             request_id=request.request_id, correlation_id=request.correlation_id,
             provider=provider.name, model=provider.model, order=order)

@@ -389,9 +389,23 @@
     if (!Array.isArray(value)) return [];
     return value.map((raw, index) => {
       const item = raw as Record<string, unknown>;
+      const nestedSeries = Array.isArray(item.series)
+        ? item.series as Array<Record<string, unknown>>
+        : [];
       const normalizedChartId = String(item.chartId ?? item.titleKey ?? '')
         .toLowerCase().replaceAll(/[^a-z]/g, '');
-      const title = normalizedChartId.includes('whatifanalysis')
+      const genericReportTitle = String(item.titleKey ?? '') === 'result.chart.report';
+      const approvedChartHints = Array.isArray(orderPayload.chartHints)
+        ? orderPayload.chartHints as Array<Record<string, unknown>>
+        : [];
+      const approvedValueColumn = String(
+        approvedChartHints[index]?.valueColumn ?? item.valueField ?? ''
+      );
+      const title = genericReportTitle
+        ? columnDisplayName(
+            approvedValueColumn || String(nestedSeries[0]?.name ?? item.name ?? '')
+          )
+        : normalizedChartId.includes('whatifanalysis')
         ? $t('whatIfAnalysis')
         : normalizedChartId.includes('featureimportance')
           ? $t('featureImportance')
@@ -399,9 +413,6 @@
             String(item.title ?? item.name ?? item.titleKey ?? `${$t('charts')} ${index + 1}`),
             $locale === 'tr' ? 'tr-TR' : 'en-US'
           );
-      const nestedSeries = Array.isArray(item.series)
-        ? item.series as Array<Record<string, unknown>>
-        : [];
       const fallbackFeatures = item.chartId === 'feature-importance'
         && Array.isArray(orderPayload.featureColumns)
         ? orderPayload.featureColumns.map(String)
@@ -571,7 +582,7 @@
 </PageHeader>
 <StateView loading={loading && !execution && !result} {error} onretry={() => load($page.params.id!)} />
 {#if execution?.status === 'FAILED'}
-  <Card.Root class="mb-6">
+  <Card.Root class="mb-4">
     <Card.Header class="flex-row items-start justify-between gap-4">
       <div class="min-w-0">
         <Card.Description>{$t('originalRequest')}</Card.Description>
@@ -581,7 +592,7 @@
     </Card.Header>
   </Card.Root>
 
-  <Alert.Root variant="destructive" class="mb-6">
+  <Alert.Root variant="destructive" class="mb-4">
     <TriangleAlert />
     <Alert.Title>{$t('failureReason')}</Alert.Title>
     <Alert.Description class="space-y-3 leading-relaxed">
@@ -601,7 +612,7 @@
   </Alert.Root>
 
   {#if execution.history.length}
-    <Card.Root class="pdf-breakable">
+    <Card.Root class="pdf-breakable pdf-exclude">
       <Card.Header>
         <Card.Title class="text-base">{$t('timeline')}</Card.Title>
         <Card.Description>{execution.history.length} {$t('status')}</Card.Description>
@@ -629,11 +640,11 @@
 {/if}
 {#if result}
   {#if execution}
-    <Card.Root class="mb-6">
+    <Card.Root class="mb-4 pdf-narrative-card">
       <Card.Header class="flex-row items-start justify-between gap-4">
         <div class="min-w-0">
           <Card.Description>{$t('originalRequest')}</Card.Description>
-          <Card.Title class="mt-1 text-base leading-relaxed">{execution.originalRequest ?? '—'}</Card.Title>
+          <p class="pdf-narrative-content mt-1 text-base leading-relaxed">{execution.originalRequest ?? '—'}</p>
         </div>
         <Dialog.Root>
           <Dialog.Trigger>
@@ -653,26 +664,26 @@
   {/if}
 
   {#if result.rowCount === 0}
-    <Alert.Root class="mb-6">
+    <Alert.Root class="mb-4">
       <Info />
       <Alert.Title>{$t('emptyExecutionResultTitle')}</Alert.Title>
       <Alert.Description>{$t('emptyExecutionResultBody')}</Alert.Description>
     </Alert.Root>
   {:else}
-  <Card.Root class="mb-6">
+  <Card.Root class="mb-4 pdf-narrative-card">
     <Card.Header>
-      <Card.Description>{$t('summary')}</Card.Description>
+      <div class="min-w-0">
+        <Card.Description>{$t('summary')}</Card.Description>
+        {#if result.managementSummary}<p class="pdf-narrative-content mt-1 w-full text-base leading-relaxed">{formatManagementSummary(result.managementSummary)}</p>
+        {:else if result.summaryStatus === 'FAILED'}
+          <Alert.Root class="mt-1"><TriangleAlert /><Alert.Description>{$t('summaryFailed')}</Alert.Description></Alert.Root>
+        {:else}<p class="mt-1 text-sm text-muted-foreground">{$t('summaryPending')}</p>{/if}
+      </div>
     </Card.Header>
-    <Card.Content>
-    {#if result.managementSummary}<p class="w-full text-base leading-relaxed">{formatManagementSummary(result.managementSummary)}</p>
-    {:else if result.summaryStatus === 'FAILED'}
-      <Alert.Root><TriangleAlert /><Alert.Description>{$t('summaryFailed')}</Alert.Description></Alert.Root>
-    {:else}<p class="text-sm text-muted-foreground">{$t('summaryPending')}</p>{/if}
-    </Card.Content>
   </Card.Root>
 
   {#if warnings.length}
-    <section class="mb-6" aria-labelledby="warnings-title">
+    <section class="pdf-exclude mb-4" aria-labelledby="warnings-title">
       <h2 id="warnings-title" class="mb-3 text-lg font-semibold">{$t('warnings')}</h2>
       <div class="grid gap-2">
         {#each warnings as warning}
@@ -683,17 +694,17 @@
   {/if}
 
   {#if isMl}
-    <section class="mb-6 grid gap-4 lg:grid-cols-3" aria-label={$t('metrics')}>
-      <Card.Root><Card.Header class="flex-row items-center gap-3"><span class="flex size-9 items-center justify-center rounded-md bg-muted"><ClipboardList size={18} /></span><div><Card.Description>{$t('requestedAnalysis')}</Card.Description><Card.Title class="text-base">{requestedAnalysis}</Card.Title></div></Card.Header></Card.Root>
-      <Card.Root><Card.Header class="flex-row items-center gap-3"><span class="flex size-9 items-center justify-center rounded-md bg-muted"><BrainCircuit size={18} /></span><div><Card.Description>{$t('modelUsed')}</Card.Description><Card.Title class="text-base">{modelName}</Card.Title></div></Card.Header></Card.Root>
-      <Card.Root><Card.Header class="flex-row items-center gap-3"><span class="flex size-9 items-center justify-center rounded-md bg-muted"><Gauge size={18} /></span><div class="min-w-0"><Card.Description>{$t('reliability')}</Card.Description><Card.Title class="break-words text-base">{metrics.map((item) => `${item.label}: ${item.value}`).join(' · ') || '—'}</Card.Title></div></Card.Header></Card.Root>
+    <section class="pdf-ml-overview mb-4 grid gap-4 lg:grid-cols-3" aria-label={$t('metrics')}>
+      <Card.Root><Card.Header class="flex-row items-center gap-3"><span class="pdf-decorative-icon flex size-9 items-center justify-center rounded-md bg-muted"><ClipboardList size={18} /></span><div><Card.Description>{$t('requestedAnalysis')}</Card.Description><Card.Title class="text-base">{requestedAnalysis}</Card.Title></div></Card.Header></Card.Root>
+      <Card.Root><Card.Header class="flex-row items-center gap-3"><span class="pdf-decorative-icon flex size-9 items-center justify-center rounded-md bg-muted"><BrainCircuit size={18} /></span><div><Card.Description>{$t('modelUsed')}</Card.Description><Card.Title class="text-base">{modelName}</Card.Title></div></Card.Header></Card.Root>
+      <Card.Root><Card.Header class="flex-row items-center gap-3"><span class="pdf-decorative-icon flex size-9 items-center justify-center rounded-md bg-muted"><Gauge size={18} /></span><div class="min-w-0"><Card.Description>{$t('reliability')}</Card.Description><Card.Title class="break-words text-base">{metrics.map((item) => `${item.label}: ${item.value}`).join(' · ') || '—'}</Card.Title></div></Card.Header></Card.Root>
     </section>
   {/if}
 
   {#if kpis.length}
     <section aria-labelledby="kpis-title">
-      <h2 id="kpis-title" class="mb-3 mt-6 text-lg font-semibold">{$t('kpis')}</h2>
-      <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <h2 id="kpis-title" class="mb-3 mt-4 text-lg font-semibold">{$t('kpis')}</h2>
+      <div class="pdf-kpi-grid grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {#each kpis as kpi}
           <Card.Root class="min-w-0">
             <Card.Header class="min-w-0">
@@ -712,22 +723,22 @@
 
   {#if charts.length}
     <section aria-labelledby="charts-title">
-      <h2 id="charts-title" class="mb-3 mt-6 text-lg font-semibold">{$t('charts')}</h2>
-      <div class="grid gap-4 lg:grid-cols-2">
+      <h2 id="charts-title" class="mb-3 mt-4 text-lg font-semibold">{$t('charts')}</h2>
+      <div class="pdf-chart-grid grid gap-4 lg:grid-cols-2">
         {#each charts as chart}<ChartView {...chart} locale={$locale === 'tr' ? 'tr-TR' : 'en-US'} errorText={$t('chartRenderFailed')} />{/each}
       </div>
     </section>
   {/if}
 
   {#if metrics.length}
-    <section aria-labelledby="metrics-title">
-      <h2 id="metrics-title" class="mb-3 mt-6 text-lg font-semibold">{$t('metrics')}</h2>
-      <Card.Root><Card.Content class="grid gap-4 pt-6 sm:grid-cols-2 lg:grid-cols-4">{#each metrics as metric}<div class="grid gap-1"><span class="text-sm text-muted-foreground">{metric.label}</span><strong class="text-lg">{metric.value}</strong></div>{/each}</Card.Content></Card.Root>
+    <section class="pdf-metrics-section" aria-labelledby="metrics-title">
+      <h2 id="metrics-title" class="mb-3 mt-4 text-lg font-semibold">{$t('metrics')}</h2>
+      <Card.Root><Card.Content class="pdf-metrics-grid grid gap-4 pt-6 sm:grid-cols-2 lg:grid-cols-4">{#each metrics as metric}<div class="grid gap-1"><span class="text-sm text-muted-foreground">{metric.label}</span><strong class="text-lg">{metric.value}</strong></div>{/each}</Card.Content></Card.Root>
     </section>
   {/if}
 
-  <section aria-labelledby="preview-title">
-    <h2 id="preview-title" class="mb-3 mt-6 text-lg font-semibold">{$t('preview')}</h2>
+  <section class="pdf-exclude" aria-labelledby="preview-title">
+    <h2 id="preview-title" class="mb-3 mt-4 text-lg font-semibold">{$t('preview')}</h2>
     <Card.Root class="pdf-breakable">
       <Card.Header><Card.Title class="flex items-center gap-2 text-base"><Info size={17} />{$t('previewPageRows', {
         from: previewTotalElements ? previewPage * previewSize + 1 : 0,
@@ -758,8 +769,8 @@
     </Card.Root>
   </section>
 
-  <section aria-labelledby="artifact-title">
-    <h2 id="artifact-title" class="mb-3 mt-6 text-lg font-semibold">{$t('artifact')}</h2>
+  <section class="pdf-exclude" aria-labelledby="artifact-title">
+    <h2 id="artifact-title" class="mb-3 mt-4 text-lg font-semibold">{$t('artifact')}</h2>
     <Card.Root>
       <Card.Header class="flex-row items-center gap-3">
         <span class="flex size-10 items-center justify-center rounded-md bg-muted"><Box /></span>
@@ -770,8 +781,8 @@
   </section>
 
   {#if execution?.history?.length}
-    <section aria-labelledby="timeline-title">
-      <h2 id="timeline-title" class="mb-3 mt-6 text-lg font-semibold">{$t('timeline')}</h2>
+    <section class="pdf-exclude" aria-labelledby="timeline-title">
+      <h2 id="timeline-title" class="mb-3 mt-4 text-lg font-semibold">{$t('timeline')}</h2>
       <Card.Root class="pdf-breakable">
         <Card.Header>
           <Card.Title class="text-base">{$t('timeline')}</Card.Title>
@@ -797,7 +808,7 @@
     </section>
   {/if}
 
-  <Card.Root class="mt-4">
+  <Card.Root class="pdf-production-card mt-4">
     <Card.Header><Card.Title class="text-base">{$t('howProduced')}</Card.Title></Card.Header>
     <Card.Content class="grid gap-4 sm:grid-cols-2">
       {#each [

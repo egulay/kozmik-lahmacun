@@ -43,8 +43,8 @@ export function formatDuration(
 
 export function humanizeField(value: string, locale = "en-US") {
 	const replacements: Record<string, Record<string, string>> = {
-		"en-US": { avg: "Average", total: "Total", count: "Count", rate: "rate" },
-		"tr-TR": { avg: "Ortalama", total: "Toplam", count: "Sayı", rate: "oranı" },
+		"en-US": { avg: "average", total: "total", count: "count", rate: "rate" },
+		"tr-TR": { avg: "ortalama", total: "toplam", count: "sayı", rate: "oranı" },
 	};
 	const dictionary = replacements[locale] ?? replacements["en-US"];
 	const words = value

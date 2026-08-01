@@ -3,6 +3,8 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 
 from kozmik_executor.chat.api import (
+    _business_limitations_answer,
+    _creator_answer,
     _clear_governed_intent,
     _deterministic_entity_resolution,
     _governed_intent_override,
@@ -46,6 +48,33 @@ def test_classifies_conversational_report_and_ml(monkeypatch) -> None:
     assert classify(monkeypatch, "Forecast next month sales").json()["intent"] == "ML"
 
 
+def test_business_limitations_answer_is_localized_and_nontechnical() -> None:
+    english = _business_limitations_answer("English")
+    turkish = _business_limitations_answer("Turkish")
+
+    assert "What I cannot do:" in english
+    assert "Şunları yapamam:" in turkish
+    assert "controlled business test" in english
+    assert "kontrollü bir iş denemesi" in turkish
+    for technical_term in ("Spark", "Kafka", "SQL", "JSON"):
+        assert technical_term not in english
+        assert technical_term not in turkish
+
+
+def test_creator_answer_is_localized() -> None:
+    english = _creator_answer("English")
+    turkish = _creator_answer("Turkish")
+
+    assert english == (
+        "Kozmik Lahmacun was designed and developed by Emre Gülay, a software architect "
+        "and data platform engineer."
+    )
+    assert turkish == (
+        "Kozmik Lahmacun, yazılım mimarı ve veri platformu mühendisi Emre Gülay "
+        "tarafından tasarlanmış ve geliştirilmiştir."
+    )
+
+
 def test_descriptive_aggregations_and_charts_override_erroneous_ml_classification() -> None:
     payload = body(
         "Analyze call activity by month and region. Show total call count, average duration, "
@@ -59,6 +88,17 @@ def test_descriptive_aggregations_and_charts_override_erroneous_ml_classificatio
 def test_explicit_prediction_is_not_overridden_by_report_words() -> None:
     payload = body(
         "Predict expected call charge and show an actual-versus-predicted chart."
+    )
+    request = ClassificationRequest.model_validate(payload)
+
+    assert _governed_intent_override(request, IntentType.REPORT) == IntentType.ML
+
+
+def test_likely_threshold_prediction_with_charts_is_ml() -> None:
+    payload = body(
+        "Identify which calls are likely to last longer than five minutes based on call "
+        "type and region. Compare suitable methods automatically, include a predictions "
+        "preview and charts."
     )
     request = ClassificationRequest.model_validate(payload)
 

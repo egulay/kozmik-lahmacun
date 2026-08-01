@@ -217,6 +217,7 @@ class TrustedReportWorker:
             command, "WRITING_RESULTS", "RUNNING", 80, "EXECUTION_WRITING_RESULTS")
         await self._status(command, "SUMMARIZING", "RUNNING", 90, "EXECUTION_SUMMARIZING")
         explanation = await self.explainer.explain(command, result)
+        result.pop("summaryFacts", None)
         result["summaryStatus"] = explanation.status
         result["managementSummary"] = explanation.text
         await self.publish_result(ExecutionResultNotification(

@@ -7,6 +7,7 @@ RUN apt-get update \
 WORKDIR /opt/kozmik
 COPY pyproject.toml ./
 COPY src ./src
+COPY config ./config
 RUN --mount=type=cache,target=/root/.cache/pip pip install .
 
 RUN useradd --system --uid 10001 --create-home kozmik \

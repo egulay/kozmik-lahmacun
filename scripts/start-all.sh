@@ -20,10 +20,20 @@ load_deployment_secrets
 exported_openai_api_key="${OPENAI_COMPATIBLE_API_KEY:-${OPENAI_API_KEY:-}}"
 
 if [[ -n "${exported_openai_api_key}" ]]; then
+  if [[ "${LLM_PROVIDER:-}" != "OPENAI_COMPATIBLE" ]]; then
+    echo "OpenAI API key supplied, but .env does not set LLM_PROVIDER=OPENAI_COMPATIBLE." >&2
+    echo "The Java and Python iTerm tabs reload .env independently; update .env and retry." >&2
+    exit 1
+  fi
   export OPENAI_COMPATIBLE_API_KEY="${exported_openai_api_key}"
   export LLM_PROVIDER="OPENAI_COMPATIBLE"
   echo "OpenAI-compatible provider selected; the exported API key will be written to Vault."
 else
+  if [[ "${LLM_PROVIDER:-LM_STUDIO}" != "LM_STUDIO" ]]; then
+    echo "LLM_PROVIDER=${LLM_PROVIDER} requires an exported OPENAI_COMPATIBLE_API_KEY." >&2
+    echo "Export the API key or restore the LM Studio provider settings in .env." >&2
+    exit 1
+  fi
   unset OPENAI_COMPATIBLE_API_KEY OPENAI_API_KEY
   export LLM_PROVIDER="LM_STUDIO"
   echo "No exported OpenAI API key found; LM Studio provider selected."
@@ -88,6 +98,15 @@ until curl --fail --silent "http://localhost:${BACKEND_PORT:-8080}/actuator/heal
 done
 
 echo "Java control plane is healthy. Starting Python executor..."
+executor_log="${PYTHON_LOG_DIR}"
+if [[ "${executor_log}" != /* ]]; then
+  executor_log="${REPOSITORY_ROOT}/${executor_log}"
+fi
+executor_log="${executor_log}/$(date +%Y-%m)/$(date +%Y-%m-%d).log"
+executor_log_start_size=0
+if [[ -f "${executor_log}" ]]; then
+  executor_log_start_size="$(wc -c < "${executor_log}" | tr -d ' ')"
+fi
 if ! "${REPOSITORY_ROOT}/scripts/open-service-consoles.sh" python; then
   echo "Could not open the Python executor tab." >&2
   exit 1
@@ -98,8 +117,17 @@ executor_deadline=$((SECONDS + 180))
 until curl --fail --silent \
   --header "X-Internal-API-Key: ${INTERNAL_API_KEY}" \
   "http://localhost:${EXECUTOR_PORT:-8000}/internal/v1/health" >/dev/null; do
+  if [[ -f "${executor_log}" ]] \
+      && tail -c "+$((executor_log_start_size + 1))" "${executor_log}" \
+          | grep -Eq "Executor startup stopped|Application startup failed"; then
+    echo "Python executor exited during startup. Recent errors:" >&2
+    tail -n 40 "${executor_log}" >&2
+    echo "See the Kozmik Python iTerm tab and ${executor_log}" >&2
+    exit 1
+  fi
   if (( SECONDS >= executor_deadline )); then
     echo "Python executor did not become healthy." >&2
+    echo "See the Kozmik Python iTerm tab and ${executor_log}" >&2
     exit 1
   fi
   sleep 2

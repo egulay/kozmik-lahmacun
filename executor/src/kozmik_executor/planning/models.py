@@ -86,7 +86,7 @@ class ReportPlanningRequest(ContractModel):
 
 class OrderConstraints(ContractModel):
     max_preview_rows: int = Field(ge=1, le=100)
-    timeout_seconds: int = Field(ge=1, le=1800)
+    timeout_seconds: int = Field(ge=1, le=21_600)
 
 
 class SelectItem(ContractModel):
@@ -254,6 +254,12 @@ class MlWhatIfAnalysis(ContractModel):
     scenarios: list[MlWhatIfScenario] = Field(min_length=1, max_length=6)
 
 
+class MlBinaryTargetDerivation(ContractModel):
+    source_column: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$", max_length=160)
+    operator: Literal["GT", "GTE", "LT", "LTE"]
+    threshold: float
+
+
 class MlPayload(ContractModel):
     problem_type: Literal["REGRESSION", "BINARY_CLASSIFICATION"]
     algorithm: Literal[
@@ -269,6 +275,7 @@ class MlPayload(ContractModel):
         "XGBOOST_CLASSIFIER",
     ]
     target_column: str
+    binary_target_derivation: MlBinaryTargetDerivation | None = None
     feature_columns: list[str] = Field(min_length=1, max_length=50)
     categorical_feature_columns: list[str] = Field(default_factory=list, max_length=50)
     filters: list[FilterItem] = Field(default_factory=list, max_length=20)

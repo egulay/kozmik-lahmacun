@@ -12,8 +12,9 @@ from uuid import UUID, uuid5
 import httpx
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from minio import Minio
-from pyspark.sql import SparkSession, functions as spark_fn, types as spark_types
+from pyspark.sql import functions as spark_fn, types as spark_types
 from kozmik_executor.spark_runtime import run_spark_operation
+from kozmik_executor.spark_session import build_spark_session
 
 from kozmik_executor.execution.worker import EventLedger
 from kozmik_executor.chat.providers import ProviderError
@@ -165,11 +166,7 @@ class SchemaClient:
 
 class SparkCsvIngester:
     def __init__(self, spark=None, minio=None) -> None:
-        self.spark = spark or (
-            SparkSession.builder.appName("kozmik-ingestion-worker")
-            .config("spark.scheduler.mode", os.getenv("SPARK_SCHEDULER_MODE", "FAIR"))
-            .getOrCreate()
-        )
+        self.spark = spark or build_spark_session("kozmik-ingestion-worker")
         self.minio = minio or Minio(
             os.getenv("MINIO_ENDPOINT", "localhost:9000"),
             access_key=os.getenv("MINIO_ACCESS_KEY", ""),

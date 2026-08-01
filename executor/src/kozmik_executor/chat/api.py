@@ -64,6 +64,45 @@ def _response_language(request: ChatStreamRequest) -> str:
     return "Turkish" if is_turkish else "English"
 
 
+def _business_limitations_answer(response_language: str) -> str:
+    if response_language == "Turkish":
+        return (
+            "Sistemde bulunan verilerden raporlar, karşılaştırmalar, grafikler, tahminler "
+            "ve karar odaklı özetler hazırlayabilirim.\n\n"
+            "Şunları yapamam:\n"
+            "- Sohbete yapıştırılan veya henüz sisteme aktarılmamış verileri analiz edemem.\n"
+            "- Tahminlerin kesin olarak gerçekleşeceğini garanti edemem; sonuçlar mevcut "
+            "geçmiş verilerdeki örüntülere dayanan yaklaşık değerlerdir.\n"
+            "- Hesaplanmış bir senaryo karşılaştırması olmadan fiyat, indirim, miktar veya "
+            "politika değişikliği öneremem. Bu tür kararlar kontrollü bir iş denemesiyle "
+            "doğrulanmalıdır."
+        )
+    return (
+        "I can prepare reports, comparisons, charts, predictions, and decision-oriented "
+        "summaries from data available in the system.\n\n"
+        "What I cannot do:\n"
+        "- I cannot analyze data pasted into the conversation or information that has not "
+        "yet been added to the system.\n"
+        "- I cannot guarantee that predictions will happen exactly as estimated; they are "
+        "approximate results based on patterns in the available historical data.\n"
+        "- I cannot recommend changing prices, discounts, quantities, or policies without a "
+        "calculated scenario comparison. Such decisions should be validated with a controlled "
+        "business test."
+    )
+
+
+def _creator_answer(response_language: str) -> str:
+    if response_language == "Turkish":
+        return (
+            "Kozmik Lahmacun, yazılım mimarı ve veri platformu mühendisi Emre Gülay "
+            "tarafından tasarlanmış ve geliştirilmiştir."
+        )
+    return (
+        "Kozmik Lahmacun was designed and developed by Emre Gülay, a software architect "
+        "and data platform engineer."
+    )
+
+
 def _messages(
     request: ChatStreamRequest, config: EffectiveLlmConfiguration
 ) -> list[dict[str, str]]:
@@ -72,6 +111,8 @@ def _messages(
     if sum(len(message.content) for message in request.history) > config.max_context_characters:
         raise ProviderError("CHAT_CONTEXT_LIMIT_EXCEEDED")
     response_language = _response_language(request)
+    limitations_answer = _business_limitations_answer(response_language)
+    creator_answer = _creator_answer(response_language)
     capability_answer = (
         "Şirket verilerinizi raporlara, karşılaştırmalara ve anlaşılır öngörülere dönüştüren "
         "bir yapay zekâ asistanıyım. Verileriniz sisteme aktarıldıktan sonra raporlar "
@@ -110,6 +151,18 @@ def _messages(
         "'Bana nasıl yardımcı olursun?'. For every identity or capability question, return the "
         "following localized capability answer exactly, preserving its paragraph, heading and "
         f"three bullet points, with no additional text:\n\n{capability_answer}"
+        " When the user asks about your limitations, what you cannot do, what not to expect, "
+        "or an equivalent question, the limitations rule takes precedence over the identity "
+        "or capability rule. This includes Turkish expressions such as 'Sınırlamaların "
+        "nelerdir?', 'Neleri yapamazsın?' and 'Senden ne beklememeliyim?'. Return the following "
+        "localized limitations answer exactly, preserving its paragraphs and three bullet "
+        f"points, with no additional text:\n\n{limitations_answer}"
+        " When the user asks who created, built, designed, developed, or engineered you or "
+        "Kozmik Lahmacun, the creator rule takes precedence over the identity and capability "
+        "rules. This includes Turkish expressions such as 'Seni kim yaptı?', 'Yaratıcın kim?', "
+        "'Kim geliştirdi?', 'Mühendisin kim?' and 'Tasarımcın kim?'. Return the following "
+        "localized creator answer exactly, with no additional text:\n\n"
+        f"{creator_answer}"
     )
     return [{"role": "system", "content": system}] + [
         {"role": message.role.value, "content": message.content} for message in request.history
@@ -199,10 +252,11 @@ def _governed_intent_override(
     explicit_ml = re.search(
         r"\b(?:predict(?:ion)?|forecast|train(?:ing)?|machine learning|"
         r"classif(?:y|ication)|probability|risk score|anomaly model|"
+        r"likely\s+to|predictions?\s+preview|compare\s+suitable\s+(?:prediction\s+)?methods|"
         r"estimate(?:d)?\s+(?:expected|future)|"
         r"what[- ]if|counterfactual|controlled\s+scenarios?|unchanged\s+baseline|"
         r"tahmin\w*|öngör\w*|model\s+eğit\w*|sınıflandır\w*|olasılık|risk\s+puan\w*|"
-        r"kontrollü\s+senaryo\w*|değişmemiş\s+başlangıç)\b",
+        r"kontrollü\s+senaryo\w*|değişmemiş\s+başlangıç|muhtemel|olası)\b",
         text,
         re.IGNORECASE,
     )

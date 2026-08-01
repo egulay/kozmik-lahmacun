@@ -34,6 +34,28 @@
   let durationTimer: ReturnType<typeof setInterval> | undefined;
   let durationNow = $state(Date.now());
   let cancelDialogOpen = $state(false);
+  const terminalStatuses = new Set(['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT']);
+
+  function isTerminal(status: string): boolean {
+    return terminalStatuses.has(status);
+  }
+
+  function applyExecution(loadedExecution: Execution): boolean {
+    if (
+      execution?.id === loadedExecution.id
+      && isTerminal(execution.status)
+      && !isTerminal(loadedExecution.status)
+    ) {
+      return false;
+    }
+    execution = loadedExecution;
+    if (isTerminal(loadedExecution.status)) {
+      stream?.close();
+      stream = undefined;
+      connected = false;
+    }
+    return true;
+  }
 
   $effect(() => {
     const executionId = $page.params.id;
@@ -69,7 +91,7 @@
       const loadedExecution = await api.execution(executionId);
       const loadedEntity = await api.entity(loadedExecution.entityId).catch(() => null);
       if ($page.params.id !== executionId || $locale !== selectedLocale) return;
-      execution = loadedExecution;
+      if (!applyExecution(loadedExecution)) return;
       localizedEntity = loadedEntity;
       openWorkspaceTab({
         executionId: loadedExecution.id,
@@ -96,7 +118,7 @@
     if (
       !executionId
       || execution?.id !== executionId
-      || ['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT'].includes(execution.status)
+      || isTerminal(execution.status)
     ) return;
     stream = new DurableEventStream(`/api/executions/${executionId}/stream`, {
       onConnectionChange: (value) => (connected = value),
@@ -109,18 +131,14 @@
   }
 
   async function refresh() {
-    if (!execution || ['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT'].includes(execution.status)) {
+    if (!execution || isTerminal(execution.status)) {
       return;
     }
     try {
       const executionId = $page.params.id!;
       const loadedExecution = await api.execution(executionId);
       if ($page.params.id !== executionId) return;
-      execution = loadedExecution;
-      if (['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT'].includes(execution.status)) {
-        stream?.close();
-        connected = false;
-      }
+      applyExecution(loadedExecution);
     } catch {
       connected = false;
     }
@@ -215,10 +233,10 @@
 >
   {#snippet actions()}
     <div class="flex flex-wrap justify-end gap-2">
-      {#if execution && ['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT'].includes(execution.status)}
+      {#if execution && isTerminal(execution.status)}
         <PdfExportButton documentId={execution.id} documentType="execution" />
       {/if}
-      {#if execution && ['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT'].includes(execution.status)}
+      {#if execution && isTerminal(execution.status)}
         <DeleteExecutionButton executionId={execution.id} onDeleted={afterDelete} />
       {/if}
       <Button href="/executions" variant="outline" size="sm"><ArrowLeft size={16} />{$t('back')}</Button>
@@ -292,7 +310,7 @@
     <Card.Header><Card.Title>{$t('originalRequest')}</Card.Title></Card.Header>
     <Card.Content class="text-sm leading-relaxed text-muted-foreground">{execution.originalRequest ?? String(execution.order?.request ?? '—')}</Card.Content>
   </Card.Root>
-  <Card.Root class="pdf-breakable">
+  <Card.Root class="pdf-breakable pdf-exclude">
     <Card.Header class="flex flex-row items-start justify-between">
       <div class="min-w-0 flex-1"><Card.Title>{$t('timeline')}</Card.Title><Card.Description>{execution.history.length} {$t('status')}</Card.Description></div>
       {#if !['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT'].includes(execution.status)}
@@ -320,7 +338,7 @@
     </Card.Content>
   </Card.Root>
   {#if execution.status === 'SUCCEEDED'}
-    <Card.Root class="mt-4"><Card.Header class="flex-row items-center gap-3"><ChartNoAxesCombined size={24} /><div class="flex-1"><Card.Title>{$t('resultReady')}</Card.Title><Card.Description>{$t('artifactGuidance')}</Card.Description></div><Button href={`/results/${execution.id}`}>{$t('viewResult')}</Button></Card.Header></Card.Root>
+    <Card.Root class="pdf-exclude mt-4"><Card.Header class="flex-row items-center gap-3"><ChartNoAxesCombined size={24} /><div class="flex-1"><Card.Title>{$t('resultReady')}</Card.Title><Card.Description>{$t('artifactGuidance')}</Card.Description></div><Button href={`/results/${execution.id}`}>{$t('viewResult')}</Button></Card.Header></Card.Root>
   {/if}
 {/if}
 

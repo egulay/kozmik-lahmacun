@@ -29,22 +29,19 @@ from pyspark.ml.regression import (
     LinearRegression,
     RandomForestRegressor,
 )
-from pyspark.sql import SparkSession, functions as spark_fn
+from pyspark.sql import functions as spark_fn
 
 from kozmik_executor.planning.models import MlOrder
 from kozmik_executor.execution.spark_report import FILTER_REGISTRY
 from kozmik_executor.spark_runtime import run_spark_operation
+from kozmik_executor.spark_session import build_spark_session
 
 ML_NAMESPACE = UUID("8a859a44-9b33-49da-afbb-c6af731c9518")
 
 
 class SparkMlExecutor:
     def __init__(self, spark=None, minio=None) -> None:
-        self.spark = spark or (
-            SparkSession.builder.appName("kozmik-ml-worker")
-            .config("spark.scheduler.mode", os.getenv("SPARK_SCHEDULER_MODE", "FAIR"))
-            .getOrCreate()
-        )
+        self.spark = spark or build_spark_session("kozmik-ml-worker")
         self.minio = minio or Minio(
             os.getenv("MINIO_ENDPOINT", "localhost:9000"),
             access_key=os.getenv("MINIO_ACCESS_KEY", ""),
@@ -86,6 +83,21 @@ class SparkMlExecutor:
             if operation is None:
                 raise ValueError("FILTER_OPERATOR_NOT_ALLOWED")
             data = data.filter(operation(spark_fn.col(item.column), item))
+        derivation = order.payload.binary_target_derivation
+        if derivation is not None:
+            source = spark_fn.col(derivation.source_column)
+            comparisons = {
+                "GT": source > derivation.threshold,
+                "GTE": source >= derivation.threshold,
+                "LT": source < derivation.threshold,
+                "LTE": source <= derivation.threshold,
+            }
+            data = data.withColumn(
+                order.payload.target_column,
+                spark_fn.when(source.isNull(), spark_fn.lit(None).cast("double"))
+                .when(comparisons[derivation.operator], spark_fn.lit(1.0))
+                .otherwise(spark_fn.lit(0.0)),
+            )
         data = data.select(
             *order.payload.feature_columns, order.payload.target_column).dropna()
         if order.payload.problem_type == "BINARY_CLASSIFICATION":

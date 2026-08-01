@@ -36,6 +36,15 @@ async def lifespan(app: FastAPI):
     # process. In particular, Spark XGBoost requires pandas and pyarrow there.
     os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
     os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
+    # This must be present before the first SparkContext starts; setting
+    # spark.driver.memory on an already running JVM has no effect.
+    os.environ.setdefault(
+        "PYSPARK_SUBMIT_ARGS",
+        "--driver-memory " + os.getenv("SPARK_DRIVER_MEMORY", "8g")
+        + " --conf spark.driver.maxResultSize="
+        + os.getenv("SPARK_DRIVER_MAX_RESULT_SIZE", "512m")
+        + " pyspark-shell",
+    )
     try:
         await load_runtime_secrets_from_vault()
         # A fresh process reloads Java-owned effective configuration only after
@@ -148,20 +157,39 @@ async def correlation_context(request: Request, call_next):
 
 
 @app.get("/internal/v1/health")
-async def health(x_internal_api_key: str | None = Header(default=None)) -> dict[str, str]:
+async def health(
+    x_internal_api_key: str | None = Header(default=None),
+) -> dict[str, str | None]:
     """Expose sanitized Python and selected-provider health."""
     _authenticate(x_internal_api_key)
     try:
         effective = await configuration_client.load()
         provider = provider_registry.resolve(effective.llm)
-        available = await provider.health()
+        try:
+            await provider.ensure_ready()
+            return {
+                "status": "AVAILABLE",
+                "providerStatus": "AVAILABLE",
+                "provider": provider.name,
+                "model": provider.model,
+                "errorCode": None,
+            }
+        except ProviderError as exception:
+            return {
+                "status": "AVAILABLE",
+                "providerStatus": "UNAVAILABLE",
+                "provider": provider.name,
+                "model": provider.model,
+                "errorCode": exception.code,
+            }
+    except ProviderError as exception:
         return {
-            "status": "AVAILABLE",
-            "providerStatus": "AVAILABLE" if available else "UNAVAILABLE",
-            "provider": provider.name,
+            "status": "DEGRADED",
+            "providerStatus": "UNKNOWN",
+            "provider": "unknown",
+            "model": None,
+            "errorCode": exception.code,
         }
-    except ProviderError:
-        return {"status": "DEGRADED", "providerStatus": "UNKNOWN", "provider": "unknown"}
 
 
 @app.get("/internal/v1/liveness")

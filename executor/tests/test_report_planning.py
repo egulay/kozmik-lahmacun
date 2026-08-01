@@ -106,6 +106,7 @@ def test_categorical_business_wording_is_regenerated_to_an_approved_value():
     assert provider.calls == 2
     assert order.payload.filters[0].value == "WEB"
     assert order.constraints.max_preview_rows == 100
+    assert order.constraints.timeout_seconds == 7200
 
 
 def test_monthly_report_normalizes_bounded_date_filter_and_validates():
@@ -265,6 +266,53 @@ def test_report_resolves_selected_group_alias_to_authorized_source_column():
     order = asyncio.run(_generate_report_order(Provider(), planning_request))
 
     assert order.payload.group_by == ["category"]
+
+
+def test_turkish_presentation_aliases_are_normalized_without_changing_columns():
+    planning_request = request()
+    raw = {
+        "schemaVersion": "1.0", "executionType": "REPORT",
+        "entityId": str(planning_request.authorized_schema.entity_id),
+        "requestedLanguage": "tr", "requestSummary": "Kategori bazlı toplamlar",
+        "constraints": {"maxPreviewRows": 100, "timeoutSeconds": 60},
+        "payload": {
+            "select": [{
+                "column": "category", "alias": "Ürün Kategorisi",
+            }],
+            "filters": [], "groupBy": ["Ürün Kategorisi"],
+            "temporalGroupBy": [],
+            "aggregations": [{
+                "function": "SUM", "column": "amount", "alias": "Toplam Tutar",
+            }],
+            "having": {
+                "type": "CONDITION", "column": "Toplam Tutar",
+                "operator": "GT", "value": 0,
+            },
+            "orderBy": [{"column": "Toplam Tutar", "direction": "DESC"}],
+            "limit": 100,
+            "chartHints": [{
+                "chartType": "BAR", "categoryColumn": "Ürün Kategorisi",
+                "valueColumn": "Toplam Tutar",
+            }],
+        },
+    }
+
+    class Provider:
+        async def complete_json(self, system_prompt: str, user_prompt: str) -> dict:
+            return raw
+
+    order = asyncio.run(_generate_report_order(Provider(), planning_request))
+
+    assert order.payload.select[0].column == "category"
+    assert order.payload.select[0].alias == "urun_kategorisi"
+    assert order.payload.select[0].display_label == "Ürün Kategorisi"
+    assert order.payload.group_by == ["category"]
+    assert order.payload.aggregations[0].alias == "toplam_tutar"
+    assert order.payload.aggregations[0].display_label == "Toplam Tutar"
+    assert order.payload.having.column == "toplam_tutar"
+    assert order.payload.order_by[0].column == "toplam_tutar"
+    assert order.payload.chart_hints[0].category_column == "urun_kategorisi"
+    assert order.payload.chart_hints[0].value_column == "toplam_tutar"
 
 
 def test_temporal_grouping_rejects_non_temporal_column():

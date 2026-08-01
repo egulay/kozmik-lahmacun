@@ -9,6 +9,7 @@ from pyspark.sql import SparkSession
 import kozmik_executor.execution.spark_ml as spark_ml_module
 from kozmik_executor.execution.spark_ml import SparkMlExecutor
 from kozmik_executor.planning.api import (
+    _enforce_execution_constraints,
     _fit_trial_budget,
     _normalize_ml_features,
     _remove_implicit_what_if_baseline,
@@ -78,6 +79,40 @@ def test_ml_validation_enforces_role_and_parameter_ranges():
     with pytest.raises(PlanningValidationError) as error:
         validate_ml_order(order(scientist, {"maxIter": 5000}), scientist)
     assert "PARAMETER_NOT_ALLOWED" in {issue.code for issue in error.value.issues}
+
+
+def test_control_plane_overrides_llm_operational_constraints():
+    raw = {"constraints": {"maxPreviewRows": 1, "timeoutSeconds": 60}}
+
+    _enforce_execution_constraints(raw, max_preview_rows=100, timeout_seconds=1800)
+
+    assert raw["constraints"] == {
+        "maxPreviewRows": 100,
+        "timeoutSeconds": 1800,
+    }
+
+
+def test_binary_threshold_target_is_governed_and_prevents_leakage():
+    planning = request()
+    value = order(planning).model_dump(by_alias=True, mode="json")
+    value["payload"].update({
+        "problemType": "BINARY_CLASSIFICATION",
+        "algorithm": "LOGISTIC_REGRESSION",
+        "targetColumn": "high_revenue",
+        "binaryTargetDerivation": {
+            "sourceColumn": "revenue", "operator": "GT", "threshold": 35,
+        },
+        "metrics": ["ACCURACY", "F1", "AUC"],
+    })
+    governed = MlOrder.model_validate(value)
+
+    validate_ml_order(governed, planning)
+    governed.payload.feature_columns.append("revenue")
+    with pytest.raises(PlanningValidationError) as error:
+        validate_ml_order(governed, planning)
+    assert "DERIVED_TARGET_SOURCE_IS_FEATURE" in {
+        issue.code for issue in error.value.issues
+    }
 
 
 def test_what_if_validation_allows_only_governed_numeric_features():
@@ -151,6 +186,23 @@ def test_ml_features_are_limited_to_supported_authorized_columns():
         "payload": {
             "targetColumn": "revenue",
             "featureColumns": ["units", "unknown", "revenue", "units", "price"],
+        },
+    }
+
+    _normalize_ml_features(raw, planning)
+
+    assert raw["payload"]["featureColumns"] == ["units", "price"]
+
+
+def test_ml_features_exclude_the_derived_target_source():
+    planning = request()
+    raw = {
+        "payload": {
+            "targetColumn": "high_revenue",
+            "binaryTargetDerivation": {
+                "sourceColumn": "revenue", "operator": "GT", "threshold": 35,
+            },
+            "featureColumns": ["units", "revenue", "price"],
         },
     }
 
@@ -471,6 +523,40 @@ def test_binary_classification_produces_probabilities_and_safe_aggregate_facts(
     assert {"ACCURACY", "F1", "AUC", "AVERAGE_POSITIVE_PROBABILITY"}.issubset(facts)
     assert 0 <= facts["AVERAGE_POSITIVE_PROBABILITY"]["value"] <= 100
     assert facts["AVERAGE_POSITIVE_PROBABILITY"]["unit"] == "PERCENT"
+
+
+def test_binary_threshold_target_is_created_inside_trusted_spark(
+    tmp_path, spark,
+):
+    source = tmp_path / "derived-binary-target.json"
+    source.write_text("\n".join(json.dumps({
+        "units": float(index),
+        "price": float(index % 5),
+        "revenue": float(index + index % 5),
+    }) for index in range(1, 81)), encoding="utf-8")
+    value = order(request()).model_dump(by_alias=True, mode="json")
+    value["payload"].update({
+        "problemType": "BINARY_CLASSIFICATION",
+        "algorithm": "LOGISTIC_REGRESSION",
+        "targetColumn": "high_revenue",
+        "binaryTargetDerivation": {
+            "sourceColumn": "revenue", "operator": "GT", "threshold": 35,
+        },
+        "parameters": {"maxIter": 30, "regParam": 0.0},
+        "metrics": ["ACCURACY", "F1", "AUC"],
+    })
+    governed = MlOrder.model_validate(value)
+    store = MemoryMinio()
+
+    result = asyncio.run(SparkMlExecutor(spark, store).execute(
+        uuid4(), governed,
+        {"datasetUri": str(source), "datasetFormat": "json", "timeoutSeconds": 120},
+        asyncio.Event()))
+
+    assert {row["high_revenue"] for row in result["preview"]["rows"]} <= {0.0, 1.0}
+    assert "positiveProbability" in {
+        item["name"] for item in result["preview"]["columns"]
+    }
 
 
 def test_bounded_candidate_pipeline_selects_best_model_on_validation_data(

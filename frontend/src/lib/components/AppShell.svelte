@@ -31,6 +31,13 @@
   import WorkspaceTabs from './WorkspaceTabs.svelte';
   import ExecutionTypeIcon from './ExecutionTypeIcon.svelte';
 
+  type ServiceHealth = {
+    service: 'backend' | 'executor' | 'llm' | 'kafka';
+    status: string;
+    model: string | null;
+    errorCode: string | null;
+  };
+
   let { children }: { children: Snippet } = $props();
   let dark = $state(false);
   let recentThreads = $state<ChatThread[]>([]);
@@ -48,11 +55,11 @@
   let resultTreeLoading = $state(false);
   let executionTreeLoadingMore = $state(false);
   let resultTreeLoadingMore = $state(false);
-  let serviceStatuses = $state<Record<string, string>>({
-    backend: 'UNKNOWN',
-    executor: 'UNKNOWN',
-    llm: 'UNKNOWN',
-    kafka: 'UNKNOWN'
+  let serviceStatuses = $state<Record<string, ServiceHealth>>({
+    backend: serviceHealth('backend', 'UNKNOWN'),
+    executor: serviceHealth('executor', 'UNKNOWN'),
+    llm: serviceHealth('llm', 'UNKNOWN'),
+    kafka: serviceHealth('kafka', 'UNKNOWN')
   });
   let healthTimer: ReturnType<typeof setInterval> | undefined;
   let executionTimer: ReturnType<typeof setInterval> | undefined;
@@ -269,16 +276,46 @@
     try {
       const response = await api.serviceStatuses();
       serviceStatuses = Object.fromEntries(
-        response.services.map((item) => [item.service, item.status])
+        response.services.map((item) => [item.service, item])
       );
     } catch {
       serviceStatuses = {
-        backend: 'UNAVAILABLE',
-        executor: 'UNKNOWN',
-        llm: 'UNKNOWN',
-        kafka: 'UNKNOWN'
+        backend: serviceHealth('backend', 'UNAVAILABLE'),
+        executor: serviceHealth('executor', 'UNKNOWN'),
+        llm: serviceHealth('llm', 'UNKNOWN', 'EXECUTOR_UNAVAILABLE'),
+        kafka: serviceHealth('kafka', 'UNKNOWN')
       };
     }
+  }
+
+  function serviceHealth(
+    service: ServiceHealth['service'],
+    status: string,
+    errorCode: string | null = null
+  ): ServiceHealth {
+    return { service, status, model: null, errorCode };
+  }
+
+  function serviceStatus(service: string) {
+    return serviceStatuses[service]?.status ?? 'UNKNOWN';
+  }
+
+  function serviceTooltip(service: string) {
+    const health = serviceStatuses[service];
+    if (service === 'llm') {
+      if (available(health?.status ?? 'UNKNOWN') && health?.model) return health.model;
+      if (health?.errorCode === 'LLM_MODEL_NOT_AVAILABLE') return $t('llmModelUnavailable');
+      if (health?.errorCode === 'LLM_PROVIDER_AUTHENTICATION_FAILED') return $t('llmAuthenticationFailed');
+      if (health?.errorCode === 'LLM_PROVIDER_ACCESS_DENIED') return $t('llmAccessDenied');
+      if (health?.errorCode === 'LLM_PROVIDER_QUOTA_EXCEEDED') return $t('llmQuotaExceeded');
+      if (health?.errorCode === 'EXECUTOR_UNAVAILABLE'
+        || serviceStatus('executor') === 'UNAVAILABLE') return $t('llmHealthUnverified');
+      if (health?.errorCode === 'LLM_PROVIDER_UNAVAILABLE') return $t('llmProviderUnavailable');
+      return $t('serviceUnavailable');
+    }
+    return available(health?.status ?? 'UNKNOWN')
+      ? statusLabel(health?.status ?? 'UNKNOWN', $locale)
+      : $t('serviceUnavailable');
   }
 
   function available(status: string) {
@@ -286,7 +323,7 @@
   }
 
   function liveConnectionActive() {
-    return available(serviceStatuses.kafka ?? 'UNKNOWN');
+    return available(serviceStatus('kafka'));
   }
 
   function toggleTheme() {
@@ -575,15 +612,15 @@
                   <Badge
                     {...props}
                     variant="outline"
-                    class={available(serviceStatuses[service[0]] ?? 'UNKNOWN')
+                    class={available(serviceStatus(service[0]))
                       ? 'gap-1.5 text-emerald-700 dark:text-emerald-400' : 'gap-1.5 text-destructive'}
                   >
-                    <span class={`size-1.5 rounded-full ${available(serviceStatuses[service[0]] ?? 'UNKNOWN') ? 'bg-emerald-500' : 'bg-destructive'}`}></span>{service[1]}
+                    <span class={`size-1.5 rounded-full ${available(serviceStatus(service[0])) ? 'bg-emerald-500' : 'bg-destructive'}`}></span>{service[1]}
                   </Badge>
                 {/snippet}
               </Tooltip.Trigger>
               <Tooltip.Content>
-                {statusLabel(serviceStatuses[service[0]] ?? 'UNKNOWN', $locale)}
+                {serviceTooltip(service[0])}
               </Tooltip.Content>
             </Tooltip.Root>
           {/each}

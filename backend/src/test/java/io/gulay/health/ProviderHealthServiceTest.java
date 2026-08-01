@@ -18,7 +18,8 @@ class ProviderHealthServiceTest {
             assertThat(exchange.getRequestHeaders().getFirst("X-Internal-API-Key"))
                     .isEqualTo("internal-test-key");
             val body = """
-                    {"status":"AVAILABLE","providerStatus":"AVAILABLE","provider":"lm-studio"}
+                    {"status":"AVAILABLE","providerStatus":"AVAILABLE","provider":"lm-studio",
+                     "model":"qwen-test","errorCode":null}
                     """.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, body.length);
@@ -34,7 +35,7 @@ class ProviderHealthServiceTest {
 
             assertThat(service.check()).isEqualTo(
                     new ProviderHealthService.Snapshot(
-                            "AVAILABLE", "AVAILABLE", "lm-studio"));
+                            "AVAILABLE", "AVAILABLE", "lm-studio", "qwen-test", null));
         } finally {
             server.stop(0);
         }
@@ -46,6 +47,7 @@ class ProviderHealthServiceTest {
                 RestClient.builder(), "http://localhost:1", "");
 
         assertThat(service.check()).isEqualTo(
-                new ProviderHealthService.Snapshot("UNKNOWN", "UNKNOWN", null));
+                new ProviderHealthService.Snapshot(
+                        "UNKNOWN", "UNKNOWN", null, null, null));
     }
 }
