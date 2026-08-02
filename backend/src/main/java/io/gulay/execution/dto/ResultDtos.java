@@ -16,6 +16,7 @@ public final class ResultDtos {
             String schemaVersion, UUID executionId, long rowCount, JsonNode preview,
             JsonNode kpis, JsonNode charts, JsonNode warnings, ArtifactResponse artifact,
             String guidanceKey, String summaryStatus, String managementSummary,
+            String summaryValidationStatus,
             int previewPage, int previewSize, long previewTotalElements,
             int previewTotalPages) {
     }

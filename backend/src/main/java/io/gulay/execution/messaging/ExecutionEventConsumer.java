@@ -19,6 +19,7 @@ import io.gulay.execution.result.data.repository.ExecutionResultRepository;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
 
@@ -188,10 +189,62 @@ public class ExecutionEventConsumer {
                 || event.charts().toString().length() > 100_000
                 || event.warnings().toString().length() > 20_000
                 || !Set.of("COMPLETED", "FAILED").contains(event.summaryStatus())
+                || event.summaryEvidence() == null || !event.summaryEvidence().isObject()
+                || !"2.0".equals(event.summaryEvidence().path("schemaVersion").asText())
+                || !"1.0".equals(event.summaryEvidence().path(
+                "semanticRegistryVersion").asText())
+                || event.summaryEvidence().toString().length() > 200_000
+                || !Set.of("ACCEPTED", "ACCEPTED_WITH_ADVISORIES", "REJECTED",
+                "PROVIDER_FAILED").contains(event.summaryValidationStatus())
+                || event.summaryValidationIssues() == null
+                || !event.summaryValidationIssues().isArray()
+                || event.summaryValidationIssues().size() > 50
+                || event.summaryValidationIssues().toString().length() > 10_000
+                || invalidSummaryIssues(event.summaryValidationIssues())
+                || event.summaryBlockingIssues() == null
+                || !event.summaryBlockingIssues().isArray()
+                || event.summaryBlockingIssues().size() > 50
+                || invalidSummaryIssues(event.summaryBlockingIssues())
+                || event.summaryAdvisoryIssues() == null
+                || !event.summaryAdvisoryIssues().isArray()
+                || event.summaryAdvisoryIssues().size() > 50
+                || invalidSummaryIssues(event.summaryAdvisoryIssues())
+                || issuesOverlap(event.summaryBlockingIssues(), event.summaryAdvisoryIssues())
+                || !issueSet(event.summaryValidationIssues()).equals(unionIssues(
+                event.summaryBlockingIssues(), event.summaryAdvisoryIssues()))
+                || event.summaryRepairAttemptCount() < 0
+                || event.summaryRepairAttemptCount() > 2
+                || invalidAuditText(event.summaryProvider(), 100)
+                || invalidAuditText(event.summaryProviderModel(), 200)
+                || event.summaryGeneratedAt() == null
+                || "ACCEPTED".equals(event.summaryValidationStatus())
+                && !event.summaryValidationIssues().isEmpty()
+                || "ACCEPTED".equals(event.summaryValidationStatus())
+                && (!event.summaryBlockingIssues().isEmpty()
+                || !event.summaryAdvisoryIssues().isEmpty())
+                || "ACCEPTED_WITH_ADVISORIES".equals(event.summaryValidationStatus())
+                && (!event.summaryBlockingIssues().isEmpty()
+                || event.summaryAdvisoryIssues().isEmpty())
+                || "REJECTED".equals(event.summaryValidationStatus())
+                && event.summaryBlockingIssues().isEmpty()
+                || "PROVIDER_FAILED".equals(event.summaryValidationStatus())
+                && event.summaryBlockingIssues().isEmpty()
+                || !"ACCEPTED".equals(event.summaryValidationStatus())
+                && event.summaryValidationIssues().isEmpty()
+                || "COMPLETED".equals(event.summaryStatus())
+                && !Set.of("ACCEPTED", "ACCEPTED_WITH_ADVISORIES")
+                .contains(event.summaryValidationStatus())
+                || "FAILED".equals(event.summaryStatus())
+                && !Set.of("REJECTED", "PROVIDER_FAILED")
+                .contains(event.summaryValidationStatus())
                 || "COMPLETED".equals(event.summaryStatus())
                 && (event.managementSummary() == null || event.managementSummary().isBlank())
-                || "FAILED".equals(event.summaryStatus()) && event.managementSummary() != null
-                || event.managementSummary() != null && event.managementSummary().length() > 4000) {
+                || "COMPLETED".equals(event.summaryStatus())
+                && invalidSummaryAudit(event.summaryAudit())
+                || "COMPLETED".equals(event.summaryStatus())
+                && !event.summaryEvidence().path("language").asText()
+                .equals(event.summaryAudit().path("language").asText())
+                || "FAILED".equals(event.summaryStatus()) && event.managementSummary() != null) {
             throw new IllegalArgumentException("Unsafe execution result event");
         }
         if (processed.existsById(event.eventId())) {
@@ -208,7 +261,20 @@ public class ExecutionEventConsumer {
                 .previewJson(json(event.preview())).kpisJson(json(event.kpis()))
                 .chartsJson(json(event.charts())).warningsJson(json(event.warnings()))
                 .summaryStatus(event.summaryStatus())
-                .managementSummary(event.managementSummary()).createdAt(event.occurredAt()).build());
+                .managementSummary(event.managementSummary())
+                .summaryEvidenceJson(json(event.summaryEvidence()))
+                .summaryValidationStatus(event.summaryValidationStatus())
+                .summaryValidationIssuesJson(json(event.summaryValidationIssues()))
+                .summaryEvidenceSchemaVersion(event.summaryEvidence().path(
+                        "schemaVersion").asText())
+                .summaryAuditJson(event.summaryAudit() == null ? null : json(event.summaryAudit()))
+                .summaryBlockingIssuesJson(json(event.summaryBlockingIssues()))
+                .summaryAdvisoryIssuesJson(json(event.summaryAdvisoryIssues()))
+                .summaryRepairAttemptCount(event.summaryRepairAttemptCount())
+                .summaryProvider(event.summaryProvider())
+                .summaryProviderModel(event.summaryProviderModel())
+                .summaryGeneratedAt(event.summaryGeneratedAt())
+                .createdAt(event.occurredAt()).build());
         artifacts.save(ExecutionArtifactModel.builder().id(event.artifact().artifactId()).result(result)
                 .format(event.artifact().format()).bucketName(event.artifact().bucket())
                 .objectKey(event.artifact().objectKey()).sizeBytes(event.artifact().sizeBytes())
@@ -284,6 +350,76 @@ public class ExecutionEventConsumer {
         } catch (Exception exception) {
             throw new IllegalArgumentException("Invalid event details", exception);
         }
+    }
+
+    private boolean invalidSummaryIssues(JsonNode issues) {
+        for (val issue : issues) {
+            if (!issue.isTextual() || issue.asText().isBlank() || issue.asText().length() > 100) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private Set<String> issueSet(JsonNode issues) {
+        val values = new HashSet<String>();
+        for (val issue : issues) {
+            values.add(issue.asText());
+        }
+        return values;
+    }
+
+    private Set<String> unionIssues(JsonNode blocking, JsonNode advisory) {
+        val values = new HashSet<>(issueSet(blocking));
+        values.addAll(issueSet(advisory));
+        return values;
+    }
+
+    private boolean issuesOverlap(JsonNode blocking, JsonNode advisory) {
+        val intersection = new HashSet<>(issueSet(blocking));
+        intersection.retainAll(issueSet(advisory));
+        return !intersection.isEmpty();
+    }
+
+    private boolean invalidAuditText(String value, int maximumLength) {
+        return value == null || value.isBlank() || value.length() > maximumLength
+                || value.chars().anyMatch(character -> Character.isISOControl(character));
+    }
+
+    private boolean invalidSummaryAudit(JsonNode audit) {
+        return audit == null || !audit.isObject()
+                || !"2.0".equals(audit.path("schemaVersion").asText())
+                || !Set.of("en", "tr").contains(audit.path("language").asText())
+                || invalidNarrative(textOrNull(audit.path("prose")))
+                || invalidEvidenceIds(audit.path("evidenceIds"))
+                || invalidSummaryScope(audit.path("scope"));
+    }
+
+    private boolean invalidEvidenceIds(JsonNode evidenceIds) {
+        if (!evidenceIds.isArray() || evidenceIds.isEmpty()) {
+            return true;
+        }
+        for (val evidenceId : evidenceIds) {
+            if (invalidAuditText(textOrNull(evidenceId), 160)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean invalidSummaryScope(JsonNode scope) {
+        if (!scope.isObject()) {
+            return true;
+        }
+        return Set.of("evidenceScopes", "populationScopes", "groupingDimensions",
+                        "groupingValues", "periods", "aggregations", "datasetRoles",
+                        "scenarioCodes", "selectedModels", "selectionMetrics", "metricCodes",
+                        "metricAveragingScopes")
+                .stream().anyMatch(field -> !scope.path(field).isArray());
+    }
+
+    private boolean invalidNarrative(String value) {
+        return value == null || value.isBlank();
     }
 
     private void afterCommit(UUID executionId, UUID eventId, String type, Object event) {

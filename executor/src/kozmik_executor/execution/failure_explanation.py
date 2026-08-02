@@ -41,9 +41,13 @@ class FailureExplainer:
             aggregation_sources = {
                 item.column for item in payload.aggregations if item.column is not None
             }
+            temporal_outputs = {
+                (item.column, item.alias) for item in payload.temporal_group_by
+            }
             if payload.aggregations and any(
                 item.column not in payload.group_by
                 and item.column not in aggregation_sources
+                and (item.column, item.alias or item.column) not in temporal_outputs
                 for item in payload.select
             ):
                 return (

@@ -83,6 +83,7 @@ class IntentType(StrEnum):
     CONVERSATIONAL = "CONVERSATIONAL"
     REPORT = "REPORT"
     ML = "ML"
+    UNSUPPORTED_LANGUAGE = "UNSUPPORTED_LANGUAGE"
 
 
 class EntityMetadata(ContractModel):
@@ -90,6 +91,7 @@ class EntityMetadata(ContractModel):
     name: str = Field(min_length=1, max_length=160)
     description: str | None = Field(default=None, max_length=2000)
     column_names: list[str] = Field(max_length=500)
+    column_labels: list[str] = Field(default_factory=list, max_length=1_000)
 
 
 class ClassificationRequest(ContractModel):
@@ -123,3 +125,4 @@ class ClassificationResponse(ContractModel):
     selected_entity_id: UUID | None = None
     provider: str
     model: str
+    unsupported_language_response: str | None = Field(default=None, max_length=2_000)

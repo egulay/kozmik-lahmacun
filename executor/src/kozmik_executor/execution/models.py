@@ -76,4 +76,18 @@ class ExecutionResultNotification(EventEnvelope):
     artifact: dict[str, Any]
     model_artifact: dict[str, Any] | None = None
     summary_status: Literal["COMPLETED", "FAILED"]
-    management_summary: str | None = Field(default=None, max_length=4000)
+    management_summary: str | None = None
+    summary_evidence: dict[str, Any]
+    summary_validation_status: Literal[
+        "ACCEPTED", "ACCEPTED_WITH_ADVISORIES", "REJECTED", "PROVIDER_FAILED"
+    ]
+    summary_validation_issues: list[str] = Field(max_length=50)
+    summary_audit: dict[str, Any] | None = None
+    summary_blocking_issues: list[str] = Field(max_length=50)
+    summary_advisory_issues: list[str] = Field(max_length=50)
+    # Structured repair and prose-only recovery are both audited here. Recovery
+    # depth must never invalidate an otherwise completed analytical result.
+    summary_repair_attempt_count: int = Field(ge=0)
+    summary_provider: str
+    summary_provider_model: str
+    summary_generated_at: datetime

@@ -44,7 +44,12 @@ public final class ExecutionMessagingContracts {
             UUID entityId, UUID actorUserId, Instant occurredAt, String status,
             String resultCode, long rowCount, JsonNode preview, JsonNode kpis,
             JsonNode charts, JsonNode warnings, Artifact artifact,
-            Artifact modelArtifact, String summaryStatus, String managementSummary) {
+            Artifact modelArtifact, String summaryStatus, String managementSummary,
+            JsonNode summaryEvidence, String summaryValidationStatus,
+            JsonNode summaryValidationIssues, JsonNode summaryAudit,
+            JsonNode summaryBlockingIssues, JsonNode summaryAdvisoryIssues,
+            int summaryRepairAttemptCount, String summaryProvider,
+            String summaryProviderModel, Instant summaryGeneratedAt) {
     }
 
     public record Artifact(

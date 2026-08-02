@@ -61,6 +61,7 @@ public class ResultQueryService {
                     new ResultDtos.ArtifactResponse(artifact.getId(), artifact.getFormat()),
                     "result.guidance.governedPreview",
                     result.getSummaryStatus(), result.getManagementSummary(),
+                    result.getSummaryValidationStatus(),
                     page, size, totalElements, totalPages);
         } catch (Exception exception) {
             throw new IllegalStateException("Stored result is invalid", exception);

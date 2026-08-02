@@ -2,7 +2,11 @@ import asyncio
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from kozmik_executor.execution.models import ArtifactRetentionCommand, ExecutionCommand
+from kozmik_executor.execution.models import (
+    ArtifactRetentionCommand,
+    ExecutionCommand,
+    ExecutionResultNotification,
+)
 from kozmik_executor.execution.worker import (
     EventLedger, KafkaExecutionWorker, TrustedReportWorker,
 )
@@ -73,6 +77,22 @@ def test_worker_emits_deterministic_lifecycle_and_bounded_result():
     ]
     assert results[0].preview["truncated"] is True
     assert results[0].artifact["format"] == "PARQUET"
+    assert results[0].summary_evidence["schemaVersion"] == "2.0"
+    assert results[0].summary_evidence["semanticRegistryVersion"] == "1.0"
+    assert results[0].summary_validation_status == "PROVIDER_FAILED"
+    assert results[0].summary_blocking_issues == ["SUMMARY_PROVIDER_FAILED"]
+    assert results[0].summary_advisory_issues == []
+    assert results[0].summary_repair_attempt_count == 0
+    assert results[0].summary_generated_at is not None
+
+    unbounded = results[0].model_dump(by_alias=True, mode="json")
+    unbounded["managementSummary"] = "Evidence-grounded explanation. " * 1000
+    validated = ExecutionResultNotification.model_validate(unbounded)
+    assert len(validated.management_summary) > 20_000
+
+    unbounded["summaryRepairAttemptCount"] = 4
+    recovered = ExecutionResultNotification.model_validate(unbounded)
+    assert recovered.summary_repair_attempt_count == 4
 
 
 def test_event_ledger_suppresses_completed_duplicate(tmp_path):

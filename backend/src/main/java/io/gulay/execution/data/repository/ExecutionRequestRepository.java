@@ -29,6 +29,8 @@ public interface ExecutionRequestRepository extends JpaRepository<ExecutionReque
                 or lower(e.executionType) like lower(concat('%', :search, '%'))
                 or lower(e.owner.displayName) like lower(concat('%', :search, '%'))
                 or lower(e.originalRequest) like lower(concat('%', :search, '%'))
+                or lower(cast(e.id as string)) like lower(concat('%', :search, '%'))
+                or lower(cast(e.status as string)) like lower(concat('%', :search, '%'))
               )
             """)
     Page<ExecutionRequestModel> findVisiblePage(
@@ -45,6 +47,8 @@ public interface ExecutionRequestRepository extends JpaRepository<ExecutionReque
                 or lower(e.executionType) like lower(concat('%', :search, '%'))
                 or lower(e.owner.displayName) like lower(concat('%', :search, '%'))
                 or lower(e.originalRequest) like lower(concat('%', :search, '%'))
+                or lower(cast(e.id as string)) like lower(concat('%', :search, '%'))
+                or lower(cast(e.status as string)) like lower(concat('%', :search, '%'))
               )
             """)
     Page<ExecutionRequestModel> findAdminPage(

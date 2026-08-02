@@ -29,3 +29,8 @@ SET search_path TO kozmik_lahmacun;
 \ir db/migration/V20__localized_entity_metadata.sql
 \ir db/migration/V21__hard_delete_retention.sql
 \ir db/migration/V22__governed_categorical_vocabulary.sql
+\ir db/migration/V23__unbounded_management_summary.sql
+\ir db/migration/V24__management_evidence_audit.sql
+\ir db/migration/V25__management_summary_draft_audit.sql
+\ir db/migration/V26__rename_management_summary_audit.sql
+\ir db/migration/V27__simplify_management_summary_audit.sql

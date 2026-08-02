@@ -50,9 +50,17 @@ public class UserManagementService {
     private final FindByIndexNameSessionRepository<? extends Session> sessions;
     private final Clock clock;
 
-    public UserManagementDtos.UserPage list(int page, int size) {
+    public UserManagementDtos.UserPage list(
+            int page, int size, Set<UserStatus> statuses, String search) {
         reconcile();
-        val result = users.findByStatusNot(UserStatus.DELETED,
+        val requestedStatuses = statuses == null || statuses.isEmpty()
+                ? Set.of(UserStatus.ACTIVE, UserStatus.SUSPENDED)
+                : statuses.stream().filter(status -> status != UserStatus.DELETED)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        val effectiveStatuses = requestedStatuses.isEmpty()
+                ? Set.of(UserStatus.ACTIVE, UserStatus.SUSPENDED) : requestedStatuses;
+        val normalizedSearch = search == null ? "" : search.trim();
+        val result = users.findFilteredPage(effectiveStatuses, normalizedSearch,
                 PageRequest.of(page, Math.min(Math.max(size, 1), 100),
                         Sort.by(Sort.Direction.ASC, "displayName")));
         return new UserManagementDtos.UserPage(

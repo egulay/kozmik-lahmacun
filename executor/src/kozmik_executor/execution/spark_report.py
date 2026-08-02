@@ -1,5 +1,7 @@
 import asyncio
+import math
 import os
+import re
 import tempfile
 from collections.abc import Callable
 from decimal import Decimal
@@ -25,6 +27,10 @@ from kozmik_executor.spark_runtime import run_spark_operation
 from kozmik_executor.spark_session import build_spark_session
 
 ARTIFACT_NAMESPACE = UUID("19af38da-8525-4e7f-986f-9cbb4fcc9ab8")
+_SENSITIVE_SUMMARY_FIELD = re.compile(
+    r"(?:^|_)(?:id|uuid|email|phone|mobile|address|name|subscriber|customer|account)(?:$|_)",
+    re.IGNORECASE,
+)
 
 
 def _filter_eq(column, item):
@@ -167,6 +173,10 @@ class SparkReportExecutor:
         self.spark.sparkContext.setJobGroup(str(execution_id), "Kozmik governed report", True)
         row_count = transformed.count()
         summary_comparisons = self._summary_comparisons(transformed, order, row_count)
+        normalized_comparisons = self._normalized_comparisons(
+            transformed, order, row_count
+        )
+        time_changes = self._time_changes(transformed, order, row_count)
         preview_limit = order.constraints.max_preview_rows
         preview_rows = [row.asDict(recursive=True) for row in transformed.limit(preview_limit).collect()]
         chart_rows = preview_rows
@@ -194,11 +204,73 @@ class SparkReportExecutor:
                         "truncated": row_count > preview_limit},
             "kpis": self._kpis(order, preview_rows),
             "charts": self._charts(order, chart_rows),
-            "summaryFacts": {"reportComparisons": summary_comparisons},
+            "summaryFacts": {
+                "schemaVersion": "2.0",
+                "reportBreakdown": self._report_breakdown(order, chart_rows),
+                "reportMeasures": self._report_measure_results(
+                    order, row_count, preview_rows
+                ),
+                "reportComparisons": summary_comparisons,
+                "normalizedComparisons": normalized_comparisons,
+                "timeChanges": time_changes,
+            },
             "warnings": [],
             "artifact": {"artifactId": str(artifact_id), "format": "PARQUET",
                          "bucket": "results", "objectKey": object_key, "sizeBytes": size},
         }
+
+    @staticmethod
+    def _report_breakdown(
+        order: ReportOrder, rows: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Return aggregate result rows safe for management-summary generation."""
+        allowed_fields = {
+            *(
+                field for field in order.payload.group_by
+                if not _SENSITIVE_SUMMARY_FIELD.search(field)
+            ),
+            *(
+                item.alias for item in order.payload.temporal_group_by
+                if not _SENSITIVE_SUMMARY_FIELD.search(item.alias)
+            ),
+            *(item.alias for item in order.payload.aggregations),
+        }
+        breakdown: list[dict[str, Any]] = []
+        for row in rows:
+            item = {
+                field: SparkReportExecutor._summary_value(value)
+                for field, value in row.items()
+                if field in allowed_fields
+                and isinstance(value, (str, int, float, bool, Decimal, date, datetime))
+                or field in allowed_fields and value is None
+            }
+            if item and item not in breakdown:
+                breakdown.append(item)
+        additive_aliases = {
+            item.alias for item in order.payload.aggregations
+            if item.function in {AggregationFunction.SUM, AggregationFunction.COUNT}
+        }
+        totals = {
+            alias: sum(
+                float(row[alias]) for row in breakdown
+                if isinstance(row.get(alias), (int, float, Decimal))
+            )
+            for alias in additive_aliases
+        }
+        for row in breakdown:
+            for alias, total in totals.items():
+                value = row.get(alias)
+                if total > 0 and isinstance(value, (int, float, Decimal)):
+                    row[f"{alias}ShareOfTotalPercent"] = float(value) / total * 100
+        return breakdown
+
+    @staticmethod
+    def _summary_value(value: Any) -> Any:
+        if isinstance(value, (date, datetime)):
+            return value.isoformat()
+        if isinstance(value, Decimal):
+            return str(value)
+        return value
 
     @staticmethod
     def _map_filter(expression: FilterExpression):
@@ -294,7 +366,7 @@ class SparkReportExecutor:
     def _summary_comparisons(
         frame: DataFrame, order: ReportOrder, row_count: int,
     ) -> list[dict[str, Any]]:
-        """Calculate complete grouped-result extrema without collecting result rows."""
+        """Calculate typed extrema across the complete grouped result."""
         if row_count < 2 or not order.payload.aggregations:
             return []
         temporal_aliases = {item.alias for item in order.payload.temporal_group_by}
@@ -311,7 +383,7 @@ class SparkReportExecutor:
             if isinstance(field.dataType, NumericType)
         }
         measures = [
-            item.alias for item in order.payload.aggregations
+            item for item in order.payload.aggregations
             if item.alias in numeric_fields
         ][:5]
         if not measures:
@@ -320,7 +392,8 @@ class SparkReportExecutor:
             *(spark_fn.col(name).alias(name) for name in dimensions)
         )
         expressions = []
-        for measure in measures:
+        for aggregation in measures:
+            measure = aggregation.alias
             column = spark_fn.col(measure)
             expressions.extend([
                 spark_fn.max(column).alias(f"{measure}__max"),
@@ -330,8 +403,30 @@ class SparkReportExecutor:
                 spark_fn.min_by(dimension_struct, column).alias(f"{measure}__min_dimensions"),
             ])
         aggregate = frame.agg(*expressions).first().asDict(recursive=True)
+        tie_expressions = []
+        for aggregation in measures:
+            measure = aggregation.alias
+            highest = aggregate.get(f"{measure}__max")
+            lowest = aggregate.get(f"{measure}__min")
+            if not isinstance(highest, (int, float, Decimal)) or not isinstance(
+                lowest, (int, float, Decimal)
+            ):
+                continue
+            tie_expressions.extend([
+                spark_fn.sum(spark_fn.when(
+                    spark_fn.col(measure).eqNullSafe(spark_fn.lit(highest)), 1,
+                ).otherwise(0)).alias(f"{measure}__max_ties"),
+                spark_fn.sum(spark_fn.when(
+                    spark_fn.col(measure).eqNullSafe(spark_fn.lit(lowest)), 1,
+                ).otherwise(0)).alias(f"{measure}__min_ties"),
+            ])
+        tie_counts = (
+            frame.agg(*tie_expressions).first().asDict(recursive=True)
+            if tie_expressions else {}
+        )
         comparisons = []
-        for measure in measures:
+        for aggregation in measures:
+            measure = aggregation.alias
             highest = aggregate.get(f"{measure}__max")
             lowest = aggregate.get(f"{measure}__min")
             total = aggregate.get(f"{measure}__sum")
@@ -342,13 +437,17 @@ class SparkReportExecutor:
             highest_number = float(highest)
             lowest_number = float(lowest)
             difference = highest_number - lowest_number
+            denominator = (abs(highest_number) + abs(lowest_number)) / 2
             percentage = (
-                difference / abs(lowest_number) * 100
-                if lowest_number != 0 else None
+                difference / denominator * 100
+                if denominator != 0 else None
             )
             share = (
                 highest_number / float(total) * 100
-                if isinstance(total, (int, float, Decimal))
+                if aggregation.function in {
+                    AggregationFunction.SUM, AggregationFunction.COUNT,
+                }
+                and isinstance(total, (int, float, Decimal))
                 and float(total) > 0 and lowest_number >= 0 else None
             )
             def safe_dimensions(value: object) -> dict[str, Any]:
@@ -367,19 +466,210 @@ class SparkReportExecutor:
 
             comparisons.append({
                 "measure": measure,
-                "highestDimensions": safe_dimensions(aggregate.get(
-                    f"{measure}__max_dimensions")),
-                "highestValue": highest_number,
-                "lowestDimensions": safe_dimensions(aggregate.get(
-                    f"{measure}__min_dimensions")),
-                "lowestValue": lowest_number,
-                "absoluteDifference": difference,
-                "percentageDifference": percentage,
-                "highestSharePercent": min(100.0, max(0.0, share))
+                "highest": {
+                    "dimensions": safe_dimensions(aggregate.get(
+                        f"{measure}__max_dimensions")),
+                    "value": highest_number,
+                },
+                "lowest": {
+                    "dimensions": safe_dimensions(aggregate.get(
+                        f"{measure}__min_dimensions")),
+                    "value": lowest_number,
+                },
+                "absoluteSpread": difference,
+                "relativeSpread": (
+                    {
+                        "method": "SYMMETRIC_PERCENT_DIFFERENCE",
+                        "percent": min(200.0, max(0.0, percentage)),
+                        "meaning": "RELATIVE_SPREAD_BETWEEN_HIGHEST_AND_LOWEST",
+                    }
+                    if percentage is not None else None
+                ),
+                "highestShareOfTotalPercent": min(100.0, max(0.0, share))
                 if share is not None else None,
+                "highestTieCount": int(tie_counts.get(f"{measure}__max_ties", 1)),
+                "lowestTieCount": int(tie_counts.get(f"{measure}__min_ties", 1)),
                 "groupCount": row_count,
             })
         return comparisons
+
+    @staticmethod
+    def _report_measure_results(
+        order: ReportOrder, row_count: int, preview_rows: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Expose only complete-result scalar aggregates, never row-level preview values."""
+        if row_count != 1 or not preview_rows or not order.payload.aggregations:
+            return []
+        row = preview_rows[0]
+        return [
+            {"measure": item.alias, "value": row[item.alias]}
+            for item in order.payload.aggregations
+            if isinstance(row.get(item.alias), (int, float, Decimal))
+        ]
+
+    @staticmethod
+    def _time_changes(
+        frame: DataFrame, order: ReportOrder, row_count: int,
+    ) -> list[dict[str, Any]]:
+        """Compare first and last complete periods only for safely additive measures."""
+        if row_count < 2 or len(order.payload.temporal_group_by) != 1:
+            return []
+        temporal = order.payload.temporal_group_by[0]
+        additive = [
+            item for item in order.payload.aggregations
+            if item.function in {AggregationFunction.SUM, AggregationFunction.COUNT}
+        ][:5]
+        if not additive:
+            return []
+        period_frame = frame.groupBy(temporal.alias).agg(*[
+            spark_fn.sum(item.alias).alias(item.alias) for item in additive
+        ]).orderBy(spark_fn.col(temporal.alias).asc())
+        endpoints = period_frame.collect()
+        if len(endpoints) < 2:
+            return []
+        earlier = endpoints[0].asDict(recursive=True)
+        later = endpoints[-1].asDict(recursive=True)
+
+        def display(value: Any) -> Any:
+            if isinstance(value, (date, datetime)):
+                return value.isoformat()
+            if isinstance(value, Decimal):
+                return str(value)
+            return value
+
+        facts = []
+        for measure in additive:
+            earlier_value = earlier.get(measure.alias)
+            later_value = later.get(measure.alias)
+            if not isinstance(earlier_value, (int, float, Decimal)) or not isinstance(
+                later_value, (int, float, Decimal)
+            ):
+                continue
+            earlier_number = float(earlier_value)
+            later_number = float(later_value)
+            absolute_change = later_number - earlier_number
+            percentage_change = (
+                absolute_change / abs(earlier_number) * 100
+                if not math.isclose(earlier_number, 0.0, abs_tol=1e-12)
+                else None
+            )
+            facts.append({
+                "measure": measure.alias,
+                "earlier": {
+                    "dimensions": {temporal.alias: display(earlier.get(temporal.alias))},
+                    "value": earlier_number,
+                },
+                "later": {
+                    "dimensions": {temporal.alias: display(later.get(temporal.alias))},
+                    "value": later_number,
+                },
+                "absoluteChange": absolute_change,
+                "percentageChange": percentage_change,
+            })
+        return facts
+
+    @staticmethod
+    def _normalized_comparisons(
+        frame: DataFrame, order: ReportOrder, row_count: int,
+    ) -> list[dict[str, Any]]:
+        """Compare SUM measures per counted item without inferring business direction."""
+        if row_count < 2:
+            return []
+        count_measures = [
+            item for item in order.payload.aggregations
+            if item.function in {
+                AggregationFunction.COUNT, AggregationFunction.COUNT_DISTINCT,
+            }
+        ]
+        numerators = [
+            item for item in order.payload.aggregations
+            if item.function == AggregationFunction.SUM
+        ]
+        if not count_measures or not numerators:
+            return []
+        temporal_aliases = {item.alias for item in order.payload.temporal_group_by}
+        dimensions = [
+            item.alias or item.column
+            for item in order.payload.select
+            if item.column in order.payload.group_by
+            or (item.alias or item.column) in temporal_aliases
+        ]
+        if not dimensions:
+            return []
+        dimension_struct = spark_fn.struct(
+            *(spark_fn.col(name).alias(name) for name in dimensions)
+        )
+        approved = []
+        for denominator in count_measures[:1]:
+            for numerator in numerators[:5]:
+                ratio_name = f"__{numerator.alias}_per_{denominator.alias}"
+                ratio = spark_fn.when(
+                    spark_fn.col(denominator.alias) != 0,
+                    spark_fn.col(numerator.alias).cast("double")
+                    / spark_fn.col(denominator.alias).cast("double"),
+                )
+                ratio_frame = frame.withColumn(ratio_name, ratio).filter(
+                    spark_fn.col(ratio_name).isNotNull()
+                )
+                aggregate = ratio_frame.agg(
+                    spark_fn.max(ratio_name).alias("maximum"),
+                    spark_fn.min(ratio_name).alias("minimum"),
+                    spark_fn.max_by(dimension_struct, spark_fn.col(ratio_name)).alias(
+                        "maximum_dimensions"
+                    ),
+                    spark_fn.min_by(dimension_struct, spark_fn.col(ratio_name)).alias(
+                        "minimum_dimensions"
+                    ),
+                ).first().asDict(recursive=True)
+                maximum = aggregate.get("maximum")
+                minimum = aggregate.get("minimum")
+                if not isinstance(maximum, (int, float, Decimal)) or not isinstance(
+                    minimum, (int, float, Decimal)
+                ):
+                    continue
+                maximum_number = float(maximum)
+                minimum_number = float(minimum)
+                difference = maximum_number - minimum_number
+                midpoint = (abs(maximum_number) + abs(minimum_number)) / 2
+                percent = difference / midpoint * 100 if midpoint else None
+
+                def safe(value: object) -> dict[str, Any]:
+                    if not isinstance(value, dict):
+                        return {}
+                    return {
+                        key: (
+                            item.isoformat() if isinstance(item, (date, datetime))
+                            else str(item) if isinstance(item, Decimal)
+                            else item
+                        )
+                        for key, item in value.items()
+                        if isinstance(
+                            item, (str, int, float, bool, Decimal, date, datetime)
+                        ) or item is None
+                    }
+
+                approved.append({
+                    "numeratorMeasure": numerator.alias,
+                    "denominatorMeasure": denominator.alias,
+                    "highest": {
+                        "dimensions": safe(aggregate.get("maximum_dimensions")),
+                        "value": maximum_number,
+                    },
+                    "lowest": {
+                        "dimensions": safe(aggregate.get("minimum_dimensions")),
+                        "value": minimum_number,
+                    },
+                    "absoluteSpread": difference,
+                    "relativeSpread": (
+                        {
+                            "method": "SYMMETRIC_PERCENT_DIFFERENCE",
+                            "percent": min(200.0, max(0.0, percent)),
+                            "meaning": "RELATIVE_SPREAD_BETWEEN_HIGHEST_AND_LOWEST",
+                        }
+                        if percent is not None else None
+                    ),
+                })
+        return approved
 
     @staticmethod
     def _display_labels(order: ReportOrder) -> dict[str, str]:
@@ -460,6 +750,10 @@ class SparkReportExecutor:
                 "chartId": f"chart-{index + 1}",
                 "type": hint.chart_type,
                 "title": display_labels.get(value, SparkReportExecutor._fallback_label(value)),
+                "valueField": value,
+                "valueLabel": display_labels.get(
+                    value, SparkReportExecutor._fallback_label(value)
+                ),
                 "categoryField": category,
                 "categoryLabel": display_labels.get(
                     category, SparkReportExecutor._fallback_label(category)

@@ -10,4 +10,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface ExecutionStatusHistoryRepository
         extends JpaRepository<ExecutionStatusHistoryModel, UUID> {
     List<ExecutionStatusHistoryModel> findByExecutionIdOrderByOccurredAtAsc(UUID executionId);
+
+    List<ExecutionStatusHistoryModel> findByExecutionIdInOrderByOccurredAtAsc(List<UUID> executionIds);
 }

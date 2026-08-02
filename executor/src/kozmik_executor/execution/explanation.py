@@ -1,991 +1,1066 @@
 import json
 import logging
 import re
-from decimal import Decimal, InvalidOperation
+from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import ValidationError
+
+from lingua import Language, LanguageDetectorBuilder
 
 from kozmik_executor.chat.models import ContractModel, EffectiveLlmConfiguration
 from kozmik_executor.chat.providers import ProviderError, ProviderRegistry
+from kozmik_executor.execution.management_evidence import (
+    ManagementEvidence,
+    ManagementEvidenceBuilder,
+    RecommendationAuthority,
+)
+from kozmik_executor.execution.management_summary import (
+    ManagementSummaryAudit,
+    ProviderManagementProse,
+    SummaryValidation,
+    SummaryViolation,
+    ViolationSeverity,
+    evidence_index,
+    expected_scope,
+)
 from kozmik_executor.execution.models import ExecutionCommand
 
 logger = logging.getLogger(__name__)
 
 
-class ApprovedFact(ContractModel):
-    code: str = Field(max_length=100)
-    label_key: str | None = Field(default=None, max_length=200)
-    value: int | float | str | bool | None = None
-    unit: str | None = Field(default=None, max_length=40)
-
-
-class ApprovedWarning(ContractModel):
-    code: str = Field(max_length=100)
-    message_key: str | None = Field(default=None, max_length=200)
-
-
-class ApprovedDriver(ContractModel):
-    feature: str = Field(max_length=100)
-    importance: float = Field(ge=0)
-
-
-class ApprovedScenarioChange(ContractModel):
-    column: str = Field(max_length=100)
-    percent_change: float = Field(ge=-25, le=25)
-
-
-class ApprovedScenario(ContractModel):
-    code: str = Field(max_length=50)
-    changes: list[ApprovedScenarioChange] = Field(min_length=1, max_length=3)
-    delta_percent: float
-
-
-class ApprovedReportBreakdown(ContractModel):
-    dimensions: dict[str, int | float | str | bool | None] = Field(max_length=20)
-    measures: dict[str, int | float | str | bool | None] = Field(max_length=20)
-
-
-class ApprovedReportHighlight(ContractModel):
-    chart_type: str = Field(max_length=20)
-    category_field: str = Field(max_length=100)
-    leading_category: str = Field(max_length=200)
-    value: int | float
-
-
-class ApprovedReportComparison(ContractModel):
-    measure: str = Field(max_length=100)
-    highest_dimensions: dict[str, int | float | str | bool | None] = Field(max_length=20)
-    highest_value: float
-    lowest_dimensions: dict[str, int | float | str | bool | None] = Field(max_length=20)
-    lowest_value: float
-    absolute_difference: float = Field(ge=0)
-    percentage_difference: float | None = None
-    highest_share_percent: float | None = Field(default=None, ge=0, le=100)
-    group_count: int = Field(ge=2)
-
-
-class SummaryFacts(ContractModel):
-    schema_version: Literal["1.0"] = "1.0"
-    execution_type: Literal["REPORT", "ML"]
-    language: Literal["tr", "en"]
-    row_count: int = Field(ge=0)
-    objective: str | None = Field(default=None, max_length=500)
-    algorithm: str | None = Field(default=None, max_length=100)
-    target: str | None = Field(default=None, max_length=100)
-    features: list[str] = Field(default_factory=list, max_length=20)
-    drivers: list[ApprovedDriver] = Field(default_factory=list, max_length=10)
-    scenario_objective: Literal["MAXIMIZE_TARGET", "MINIMIZE_TARGET"] | None = None
-    scenarios: list[ApprovedScenario] = Field(default_factory=list, max_length=6)
-    report_breakdown: list[ApprovedReportBreakdown] = Field(
-        default_factory=list, max_length=10)
-    report_highlights: list[ApprovedReportHighlight] = Field(
-        default_factory=list, max_length=10)
-    report_comparisons: list[ApprovedReportComparison] = Field(
-        default_factory=list, max_length=10)
-    facts: list[ApprovedFact] = Field(max_length=20)
-    warnings: list[ApprovedWarning] = Field(max_length=20)
-
-
 class ExplanationOutcome(ContractModel):
     status: Literal["COMPLETED", "FAILED"]
-    text: str | None = Field(default=None, max_length=4000)
+    text: str | None = None
+    evidence: ManagementEvidence
+    validation_status: Literal[
+        "ACCEPTED", "ACCEPTED_WITH_ADVISORIES", "REJECTED", "PROVIDER_FAILED"
+    ]
+    validation_issues: list[str]
+    blocking_issues: list[str]
+    advisory_issues: list[str]
+    summary_audit: ManagementSummaryAudit | None = None
+    repair_attempt_count: int
+    provider: str
+    provider_model: str
+    generated_at: datetime
+
+
+class ManagementSummaryValidator:
+    _CURRENCY_PATTERNS = {
+        "EUR": r"\b(?:eur|euro\w*|avro\w*)\b|€",
+        "USD": r"\b(?:usd|dollars?|dolar\w*)\b|\$",
+        "TRY": r"\b(?:try|tl|turkish lira|türk lirası\w*|lira\w*)\b|₺",
+        "GBP": r"\b(?:gbp|pounds? sterling|sterlin\w*)\b|£",
+        "JPY": r"\b(?:jpy|yen)\b|¥",
+        "CNY": r"\b(?:cny|yuan|renminbi)\b",
+    }
+    _UNIT_PATTERNS = {
+        "SECOND": r"\b(?:seconds|secs?|saniye)\b|(?<!\w)\d+(?:[.,]\d+)?\s*second\b",
+        "MINUTE": r"\b(?:minutes?|mins?|dakika)\b",
+        "HOUR": r"\b(?:hours?|hrs?|saat)\b",
+        "DAY": r"\b(?:days?|gün)\b",
+        "PERCENT": r"%|\b(?:percent(?:age)?|yüzde)\b",
+        "KILOGRAM": r"\b(?:kilograms?|kilogrammes?|kg|kilogram)\b",
+        "GRAM": r"\b(?:grams?|grammes?|gram)\b",
+        "TONNE": r"\b(?:tonnes?|metric tons?|ton)\b",
+        "METRE": r"\b(?:metres?|meters?|metre|metreler|metre)\b",
+        "KILOMETRE": r"\b(?:kilometres?|kilometers?|km|kilometre)\b",
+        "LITRE": r"\b(?:litres?|liters?|litre|litreler)\b",
+    }
+
+    def validate(
+        self, text: str, evidence: ManagementEvidence,
+    ) -> SummaryValidation:
+        violations: list[SummaryViolation] = []
+        if not text.strip():
+            violations.append(self._blocking(
+                "EMPTY_SUMMARY", "Return a non-empty management explanation."
+            ))
+            return SummaryValidation(status="REJECTED", violations=violations)
+        violations.extend(self._unit_violations(text, evidence))
+        violations.extend(self._numeric_grounding_violations(text, evidence))
+        violations.extend(self._language_violations(text, evidence))
+        violations.extend(self._causality_violations(text, evidence))
+        violations.extend(self._recommendation_violations(text, evidence))
+        violations.extend(self._warning_violations(text, evidence))
+        violations.extend(self._narrative_advisories(text, evidence))
+        if evidence.result_row_count == 0:
+            violations.extend(self._zero_result_violations(text))
+        elif evidence.execution_type == "REPORT":
+            violations.extend(self._report_violations(text, evidence))
+        else:
+            violations.extend(self._ml_violations(text, evidence))
+        status = (
+            "REJECTED"
+            if any(item.severity == ViolationSeverity.BLOCKING for item in violations)
+            else "ACCEPTED_WITH_ADVISORIES" if violations else "ACCEPTED"
+        )
+        return SummaryValidation(status=status, violations=violations)
+
+    @staticmethod
+    def _blocking(code: str, instruction: str) -> SummaryViolation:
+        return SummaryViolation(
+            code=code, severity=ViolationSeverity.BLOCKING,
+            repairInstruction=instruction,
+        )
+
+    @staticmethod
+    def _advisory(code: str, instruction: str) -> SummaryViolation:
+        return SummaryViolation(
+            code=code, severity=ViolationSeverity.ADVISORY,
+            repairInstruction=instruction,
+        )
+
+    def _unit_violations(
+        self, text: str, evidence: ManagementEvidence,
+    ) -> list[SummaryViolation]:
+        # Governed labels can legitimately contain unit-like tokens (for example
+        # ``duration_seconds``). They are names, not narrative unit assertions.
+        text = self._without_governed_labels(text, evidence)
+        report_measures = [
+            *(item.measure for item in evidence.report_measure_results),
+            *(item.measure for item in evidence.report_comparisons),
+            *(item.measure for item in evidence.time_changes),
+            *(item.measure for item in evidence.report_highlights),
+            *(item.numerator for item in evidence.normalized_comparisons),
+            *(item.denominator for item in evidence.normalized_comparisons),
+        ]
+        supplied_units = {
+            item.unit.upper()
+            for item in report_measures
+            if isinstance(item.unit, str)
+        } | {
+            item.unit.upper()
+            for item in evidence.metrics
+            if isinstance(item.unit, str)
+        }
+        if any(
+            item.relative_spread is not None
+            or item.highest_share_of_total_percent is not None
+            for item in evidence.report_comparisons
+        ) or any(item.percentage_change is not None for item in evidence.time_changes):
+            supplied_units.add("PERCENT")
+        if evidence.scenarios:
+            supplied_units.add("PERCENT")
+        for currency, pattern in self._CURRENCY_PATTERNS.items():
+            if re.search(pattern, text, re.IGNORECASE) and currency not in supplied_units:
+                return [self._blocking(
+                    "UNAPPROVED_CURRENCY",
+                    "Remove the currency name or symbol because no approved evidence supplies it.",
+                )]
+        for unit, pattern in self._UNIT_PATTERNS.items():
+            if re.search(pattern, text, re.IGNORECASE) and unit not in supplied_units:
+                return [self._blocking(
+                    "UNAPPROVED_UNIT",
+                    "Remove the unit because no approved evidence supplies that unit.",
+                )]
+        if re.search(r"\bunits?\b|\bbirim(?:ler|i)?\b", text, re.IGNORECASE):
+            return [self._blocking(
+                "UNAPPROVED_UNIT",
+                "Remove the generic word unit; use only an explicitly supplied governed unit "
+                "or currency, otherwise state the calculated value without one.",
+            )]
+        return []
+
+    def _numeric_grounding_violations(
+        self, text: str, evidence: ManagementEvidence,
+    ) -> list[SummaryViolation]:
+        approved = self._approved_numbers(evidence)
+        for match in re.finditer(
+            r"(?<![\w])[-+]?\d(?:[\d.,]*\d)?(?![\w])",
+            text,
+        ):
+            parsed = self._parse_display_number(match.group())
+            if parsed is None:
+                continue
+            suffix = text[match.end():match.end() + 12].casefold().lstrip()
+            scale = 1.0
+            if suffix.startswith(("million", "milyon")):
+                scale = 1_000_000.0
+            elif suffix.startswith(("billion", "milyar")):
+                scale = 1_000_000_000.0
+            elif suffix.startswith(("thousand", "bin")):
+                scale = 1_000.0
+            parsed *= scale
+            decimals = self._display_decimal_places(match.group())
+            tolerance = max(0.5 * scale * (10 ** -decimals), abs(parsed) * 0.000_001)
+            if not any(abs(parsed - value) <= tolerance for value in approved):
+                return [self._blocking(
+                    "UNAPPROVED_NUMBER",
+                    f"Remove or correct the unsupported number {match.group()}; use only "
+                    "numbers present in the evidence contract.",
+                )]
+        return []
+
+    @classmethod
+    def _approved_numbers(cls, evidence: ManagementEvidence) -> set[float]:
+        values = {float(evidence.result_row_count)}
+        for row in evidence.report_breakdown:
+            values.update(cls._numbers_in_dimensions(row))
+        for item in evidence.report_measure_results:
+            values.add(item.value)
+        for item in evidence.report_comparisons:
+            values.update((
+                item.highest.value, item.lowest.value, item.absolute_spread,
+                float(item.group_count), float(item.highest_tie_count),
+                float(item.lowest_tie_count),
+            ))
+            if item.relative_spread:
+                values.add(item.relative_spread.percent)
+            if item.highest_share_of_total_percent is not None:
+                values.add(item.highest_share_of_total_percent)
+            for dimension in (item.highest.dimensions, item.lowest.dimensions):
+                values.update(cls._numbers_in_dimensions(dimension))
+        for item in evidence.normalized_comparisons:
+            values.update((item.highest.value, item.lowest.value, item.absolute_spread))
+            if item.relative_spread:
+                values.add(item.relative_spread.percent)
+            values.update(cls._numbers_in_dimensions(item.highest.dimensions))
+            values.update(cls._numbers_in_dimensions(item.lowest.dimensions))
+        for item in evidence.time_changes:
+            values.update((item.earlier.value, item.later.value, item.absolute_change))
+            values.add(abs(item.absolute_change))
+            if item.percentage_change is not None:
+                values.add(item.percentage_change)
+                values.add(abs(item.percentage_change))
+            values.update(cls._numbers_in_dimensions(item.earlier.dimensions))
+            values.update(cls._numbers_in_dimensions(item.later.dimensions))
+        for item in evidence.report_highlights:
+            values.add(item.value)
+            values.update(cls._numbers_in_text(item.leading_category))
+        for item in evidence.metrics:
+            values.add(item.value)
+        for item in evidence.drivers:
+            values.add(item.importance)
+        if evidence.model_selection:
+            selection = evidence.model_selection
+            values.update(
+                float(value) for value in (
+                    selection.candidate_algorithms_evaluated,
+                    selection.tuning_trials_evaluated,
+                    selection.validation_score,
+                ) if value is not None
+            )
+        for item in evidence.scenarios:
+            values.add(item.delta_percent)
+            values.add(abs(item.delta_percent))
+            values.update(
+                float(value) for value in (
+                    item.baseline_prediction, item.scenario_prediction, item.delta,
+                ) if value is not None
+            )
+            if item.delta is not None:
+                values.add(abs(item.delta))
+            for change in item.changes:
+                values.add(change.percent_change)
+                values.add(abs(change.percent_change))
+        return {value for value in values if value == value}
+
+    @classmethod
+    def _numbers_in_dimensions(cls, values: dict[str, Any]) -> set[float]:
+        approved = set()
+        for value in values.values():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                approved.add(float(value))
+            elif isinstance(value, str):
+                approved.update(cls._numbers_in_text(value))
+        return approved
+
+    @classmethod
+    def _numbers_in_text(cls, value: str) -> set[float]:
+        approved = set()
+        for match in re.finditer(r"(?<![\w])[-+]?\d(?:[\d.,]*\d)?(?![\w])", value):
+            parsed = cls._parse_display_number(match.group())
+            if parsed is not None:
+                approved.add(parsed)
+                approved.add(abs(parsed))
+        return approved
+
+    @staticmethod
+    def _parse_display_number(value: str) -> float | None:
+        normalized = value.strip()
+        if not normalized:
+            return None
+        comma = normalized.rfind(",")
+        dot = normalized.rfind(".")
+        if comma >= 0 and dot >= 0:
+            decimal = "," if comma > dot else "."
+            thousands = "." if decimal == "," else ","
+            normalized = normalized.replace(thousands, "").replace(decimal, ".")
+        elif normalized.count(",") > 1:
+            normalized = normalized.replace(",", "")
+        elif normalized.count(".") > 1:
+            normalized = normalized.replace(".", "")
+        elif comma >= 0:
+            tail = len(normalized) - comma - 1
+            normalized = (
+                normalized.replace(",", "") if tail == 3
+                else normalized.replace(",", ".")
+            )
+        try:
+            return float(normalized)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _display_decimal_places(value: str) -> int:
+        comma = value.rfind(",")
+        dot = value.rfind(".")
+        position = max(comma, dot)
+        if position < 0:
+            return 0
+        tail = len(value) - position - 1
+        return 0 if tail == 3 and value.count(",") + value.count(".") == 1 else tail
+
+    def _causality_violations(
+        self, text: str, evidence: ManagementEvidence,
+    ) -> list[SummaryViolation]:
+        causal = re.compile(
+            r"\b(?:causes?|caused(?: by)?|will result in|guarantees?|proves? that|"
+            r"neden olur|sebep olur|sonuç doğurur|garanti eder|kanıtlar?)\b",
+            re.IGNORECASE,
+        )
+        # A provider may correctly state that the result *does not* establish causality.
+        # Remove those explicit negated clauses before looking for positive causal claims.
+        asserted_text = re.sub(
+            r"\b(?:does not|do not|did not|cannot|can't|is not|are not|"
+            r"değildir|göstermez|kanıtlamaz)\b[^.!?]{0,80}\b(?:causes?|caused|"
+            r"proves?|guarantees?|neden olur|sebep olur|kanıtlar?)\b",
+            " ",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if causal.search(asserted_text) and not evidence.policy.causal_claims_allowed:
+            return [self._blocking(
+                "UNSUPPORTED_CAUSALITY",
+                "Describe association or calculated scenario difference, not causality or guarantees.",
+            )]
+        return []
+
+    @staticmethod
+    @lru_cache(maxsize=1)
+    def _language_detector():
+        return LanguageDetectorBuilder.from_languages(
+            Language.ENGLISH, Language.TURKISH,
+        ).build()
+
+    def _language_violations(
+        self, text: str, evidence: ManagementEvidence,
+    ) -> list[SummaryViolation]:
+        sanitized = self._without_governed_labels(text, evidence)
+        words = re.findall(r"[^\W\d_]+", sanitized, flags=re.UNICODE)
+        if len(words) < 8:
+            return []
+        detected = self._language_detector().detect_language_of(sanitized)
+        expected = Language.TURKISH if evidence.language == "tr" else Language.ENGLISH
+        if detected is not None and detected != expected:
+            return [self._blocking(
+                "WRONG_LANGUAGE",
+                "Rewrite the entire summary in the requested evidence language.",
+            )]
+        for segment in re.split(r"(?:\n+|(?<=[.!?])\s+)", sanitized):
+            segment_words = re.findall(r"[^\W\d_]+", segment, flags=re.UNICODE)
+            if len(segment_words) < 6:
+                continue
+            segment_language = self._language_detector().detect_language_of(segment)
+            if segment_language is not None and segment_language != expected:
+                return [self._blocking(
+                    "MIXED_LANGUAGE",
+                    "Rewrite every narrative sentence in the requested language; retain only "
+                    "governed labels or names that have no localized display label.",
+                )]
+        return []
+
+    @staticmethod
+    def _without_governed_labels(text: str, evidence: ManagementEvidence) -> str:
+        labels = {
+            *(item.measure.label for item in evidence.report_measure_results),
+            *(item.measure.label for item in evidence.report_comparisons),
+            *(item.measure.label for item in evidence.time_changes),
+            *(item.measure.label for item in evidence.report_highlights),
+            *(item.numerator.label for item in evidence.normalized_comparisons),
+            *(item.denominator.label for item in evidence.normalized_comparisons),
+            *(item.label for item in evidence.metrics),
+            *(item.feature for item in evidence.drivers),
+        }
+        if evidence.target:
+            labels.add(evidence.target)
+        sanitized = text
+        for label in sorted(labels, key=len, reverse=True):
+            if label:
+                sanitized = re.sub(re.escape(label), " ", sanitized, flags=re.IGNORECASE)
+        return sanitized
+
+    def _recommendation_violations(
+        self, text: str, evidence: ManagementEvidence,
+    ) -> list[SummaryViolation]:
+        directional = re.compile(
+            r"\b(?:should\s+(?:increase|decrease|raise|reduce|expand|cut|maintain|"
+            r"change|adjust|prioriti[sz]e)|recommend(?:s|ed|ation)?\s+(?:increasing|"
+            r"decreasing|raising|reducing|changing|adjusting|prioriti[sz]ing)|must\s+"
+            r"(?:increase|decrease|change|adjust)|prioriti[sz]e\s+(?:this|the)|"
+            r"artırmalı|azaltmalı|öncelik\s+verilmeli|değiştirilmeli|yükseltmeli|"
+            r"düşürmeli|korumalı|(?:artırma|azaltma|değiştirme)\s+önerilir)\b",
+            re.IGNORECASE,
+        )
+        if (
+            directional.search(text)
+            and evidence.policy.recommendation_authority == RecommendationAuthority.NONE
+        ):
+            return [self._blocking(
+                "UNSUPPORTED_RECOMMENDATION",
+                "Remove directional advice; no approved scenario evidence authorizes it.",
+            )]
+        if directional.search(text):
+            selected = next(
+                (
+                    item for item in evidence.scenarios
+                    if item.code == evidence.policy.authorized_scenario_code
+                ),
+                None,
+            )
+            if selected is None:
+                return [self._blocking(
+                    "RECOMMENDATION_WITHOUT_AUTHORIZED_SCENARIO",
+                    "Remove the recommendation because no scenario is authorized for it.",
+                )]
+            required_increase = any(
+                item.percent_change > 0 for item in selected.changes
+            )
+            required_decrease = any(
+                item.percent_change < 0 for item in selected.changes
+            )
+            increase = re.compile(
+                r"\b(?:increase|raise|expand|artır|yükselt)", re.IGNORECASE
+            )
+            decrease = re.compile(
+                r"\b(?:decrease|reduce|cut|azalt|düşür)", re.IGNORECASE
+            )
+            if required_increase and not increase.search(text):
+                return [self._blocking(
+                    "RECOMMENDATION_DIRECTION_MISMATCH",
+                    f"Base conditional advice only on authorized scenario {selected.code}.",
+                )]
+            if required_decrease and not decrease.search(text):
+                return [self._blocking(
+                    "RECOMMENDATION_DIRECTION_MISMATCH",
+                    f"Base conditional advice only on authorized scenario {selected.code}.",
+                )]
+        return []
+
+    def _warning_violations(
+        self, text: str, evidence: ManagementEvidence,
+    ) -> list[SummaryViolation]:
+        violations: list[SummaryViolation] = []
+        if re.search(
+            r"\b(?:not authorized|authorization policy|evidence contract|governed facts?|"
+            r"yetkili değil|yetkilendirme politikası|kanıt sözleşmesi|yönetilen olgular)\b",
+            text, re.IGNORECASE,
+        ):
+            violations.append(self._advisory(
+                "INTERNAL_POLICY_LANGUAGE",
+                "Explain the practical use or absence of calculated scenarios without exposing "
+                "internal authorization, evidence-contract, or governance terminology.",
+            ))
+        warning_codes = {item.code for item in evidence.warnings}
+        if "WHAT_IF_NOT_CAUSAL" not in warning_codes:
+            return violations
+        duplicated = re.compile(
+            r"\b(?:does not prove|controlled experiment|not a guarantee|"
+            r"market conditions|competitors?|customer behavior|"
+            r"nedensel değildir|kontrollü deney|garanti değildir|piyasa koşulları|"
+            r"rakipler|müşteri davranışı)\b",
+            re.IGNORECASE,
+        )
+        if duplicated.search(text):
+            violations.append(self._advisory(
+                "DUPLICATED_WARNING",
+                "Remove warnings because the interface renders approved warnings separately.",
+            ))
+        return violations
+
+    def _narrative_advisories(
+        self, text: str, evidence: ManagementEvidence,
+    ) -> list[SummaryViolation]:
+        violations: list[SummaryViolation] = []
+        objective_words = self._narrative_words(evidence.objective)
+        opening = re.split(r"(?:\n\n|(?<=[.!?])\s+)", text.strip(), maxsplit=1)[0]
+        opening_words = self._narrative_words(opening)
+        if len(objective_words) >= 6:
+            overlap = len(set(objective_words).intersection(opening_words))
+            if overlap / len(set(objective_words)) >= 0.85:
+                violations.append(self._advisory(
+                    "REQUEST_REPETITION",
+                    "Lead with the principal calculated result rather than restating the request.",
+                ))
+        if re.search(
+            r"\b(?:spark|parquet|dataframe|pipeline|hyperparameter|execution order|"
+            r"çalıştırma emri|veri çerçevesi|işlem hattı|hiperparametre)\b",
+            text,
+            re.IGNORECASE,
+        ):
+            violations.append(self._advisory(
+                "EXECUTION_MECHANICS_EXPOSED",
+                "Remove implementation mechanics and explain only calculated business meaning.",
+            ))
+        return violations
+
+    @staticmethod
+    def _narrative_words(value: str) -> list[str]:
+        return [
+            item.casefold() for item in re.findall(r"[^\W\d_]+", value, re.UNICODE)
+            if len(item) > 2
+        ]
+
+    def _zero_result_violations(self, text: str) -> list[SummaryViolation]:
+        no_data = re.compile(
+            r"\b(?:no (?:matching )?data|no results?|zero rows)\b|"
+            r"(?:eşleşen veri bulunamadı|sonuç bulunamadı|sıfır satır)",
+            re.IGNORECASE,
+        )
+        return (
+            [] if no_data.search(text) else [self._blocking(
+                "ZERO_RESULT_HALLUCINATION",
+                "State that no data matched; do not describe findings that do not exist.",
+            )]
+        )
+
+    def _report_violations(
+        self, text: str, evidence: ManagementEvidence,
+    ) -> list[SummaryViolation]:
+        violations = []
+        normalized = text.casefold()
+        empty_claim = re.compile(
+            r"\b(?:contains no|does not contain|without any|lacks?)\b.{0,40}"
+            r"\b(?:facts?|values?|results?|data)\b|"
+            r"(?:veri sonucu içermez|hesaplanmış değer yok|sonuç bulunmamaktadır)",
+            re.IGNORECASE,
+        )
+        if (
+            evidence.report_measure_results
+            or evidence.report_comparisons
+            or evidence.report_highlights
+        ) and empty_claim.search(text):
+            violations.append(self._blocking(
+                "REPORT_FACTS_IGNORED",
+                "Use the supplied calculated report comparisons; do not claim they are absent.",
+            ))
+        evaluative = re.compile(
+            r"\b(?:best|worst|top performer|highest performer|lowest performer|"
+            r"outperform(?:ed|s)?|underperform(?:ed|s)?|"
+            r"en iyi|en kötü|en başarılı|en başarısız|daha iyi performans|"
+            r"daha kötü performans)\b",
+            re.IGNORECASE,
+        )
+        if evaluative.search(text):
+            violations.append(self._blocking(
+                "UNSUPPORTED_REPORT_DIRECTIONALITY",
+                "Use highest/lowest recorded value, not best/worst performance; report direction is context-dependent.",
+            ))
+        spread_misuse = re.compile(
+            r"(?:%\s*\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?\s*%).{0,50}"
+            r"(?:of (?:the )?total|change|increase|decrease|growth|decline|"
+            r"toplamın|değişim|artış|azalış|büyüme|düşüş)|"
+            r"(?:of (?:the )?total|change|increase|decrease|growth|decline|"
+            r"toplamın|değişim|artış|azalış|büyüme|düşüş).{0,50}"
+            r"(?:%\s*\d+(?:[.,]\d+)?|\d+(?:[.,]\d+)?\s*%)",
+            re.IGNORECASE,
+        )
+        relative_spreads = [
+            item.relative_spread.percent
+            for item in evidence.report_comparisons
+            if item.relative_spread is not None
+        ]
+        for match in spread_misuse.finditer(text):
+            displayed = [
+                self._parse_display_number(item.group())
+                for item in re.finditer(r"\d+(?:[.,]\d+)?", match.group())
+            ]
+            if any(
+                value is not None and any(
+                    abs(value - spread) <= max(0.005, abs(value) * 0.000_001)
+                    for spread in relative_spreads
+                )
+                for value in displayed
+            ):
+                violations.append(self._blocking(
+                    "RELATIVE_SPREAD_MISSTATED",
+                    "Describe relativeSpreadPercent only as the symmetric relative spread "
+                    "between the highest and lowest values; never as share of total or "
+                    "temporal change.",
+                ))
+                break
+        for comparison in evidence.report_comparisons[:3]:
+            high_labels = self._dimension_labels(comparison.highest.dimensions)
+            low_labels = self._dimension_labels(comparison.lowest.dimensions)
+            if high_labels and not any(value in normalized for value in high_labels):
+                violations.append(self._advisory(
+                    "HIGHEST_GROUP_OMITTED",
+                    f"Identify the highest recorded group for {comparison.measure.label}.",
+                ))
+            if low_labels and not any(value in normalized for value in low_labels):
+                violations.append(self._advisory(
+                    "LOWEST_GROUP_OMITTED",
+                    f"Identify the lowest recorded group for {comparison.measure.label}.",
+                ))
+        technical = re.compile(
+            r"\b(?:governed facts?|reportbreakdown|symmetric percent difference)\b",
+            re.IGNORECASE,
+        )
+        if technical.search(text):
+            violations.append(self._advisory(
+                "TECHNICAL_REPORT_LANGUAGE",
+                "Use ordinary business language without contract or calculation-method names.",
+            ))
+        return self._deduplicate(violations)
+
+    def _ml_violations(
+        self, text: str, evidence: ManagementEvidence,
+    ) -> list[SummaryViolation]:
+        violations = []
+        metric_codes = {item.code for item in evidence.metrics}
+        if metric_codes.intersection({"MAE", "RMSE", "R2", "AUC", "F1"}) and re.search(
+            r"\b(?:metrics? (?:measure|measures|show|shows|indicate|indicates) "
+            r"(?:the )?(?:model(?:'s)? )?accuracy|model(?:'s)? accuracy (?:is )?"
+            r"measured (?:by|with)|metrikler? model doğruluğunu (?:ölçer|gösterir))\b",
+            text, re.IGNORECASE,
+        ):
+            violations.append(self._blocking(
+                "METRICS_MISLABELED_AS_ACCURACY",
+                "Do not collectively label error, variation, ranking, or F1 measurements as accuracy.",
+            ))
+        if "RMSE" in metric_codes and re.search(
+            r"\b(?:average|mean) (?:error |prediction )?magnitude\b|"
+            r"\bortalama hata büyüklüğü\b", text, re.IGNORECASE,
+        ):
+            violations.append(self._blocking(
+                "RMSE_MEAN_MAGNITUDE_MISSTATED",
+                "Explain the square root of mean squared error and its greater sensitivity to larger errors.",
+            ))
+        if evidence.drivers and re.search(
+            r"\b(?:contribut\w* to|improv\w*).{0,30}\baccuracy\b|"
+            r"\bdoğruluğa katkı\b", text, re.IGNORECASE,
+        ):
+            violations.append(self._blocking(
+                "FEATURE_IMPORTANCE_INTERPRETATION_UNSUPPORTED",
+                "Feature importance indicates model reliance only, not contribution to accuracy.",
+            ))
+        if re.search(
+            r"\b(?:highly reliable|reliable model|strong performance|weak performance|"
+            r"good performance|poor performance|acceptable performance|actionable|"
+            r"production[- ]ready|yüksek güvenilir|güvenilir model|güçlü performans|"
+            r"zayıf performans|kabul edilebilir|eyleme hazır|üretime hazır)\b",
+            text, re.IGNORECASE,
+        ):
+            violations.append(self._blocking(
+                "QUALITATIVE_PERFORMANCE_UNSUPPORTED",
+                "Remove qualitative performance or readiness judgments because no typed business "
+                "tolerance or acceptance threshold supports them.",
+            ))
+        for metric in evidence.metrics:
+            if metric.code in {"R2", "AUC"} and self._percentage_present(
+                text, metric.value
+            ):
+                misleading = re.compile(
+                    rf"(?:confidence|probability|reliability|accuracy|güven|olasılık|"
+                    rf"doğruluk).{{0,35}}{self._percentage_pattern(metric.value)}|"
+                    rf"{self._percentage_pattern(metric.value)}.{{0,35}}(?:confidence|"
+                    rf"probability|reliability|accuracy|güven|olasılık|doğruluk)",
+                    re.IGNORECASE,
+                )
+                if misleading.search(text):
+                    violations.append(self._blocking(
+                        "METRIC_MEANING_MISSTATED",
+                        f"Use the supplied business definition for {metric.code}; it is not "
+                        "confidence, probability, reliability, or general accuracy.",
+                    ))
+            if metric.code in {"MAE", "RMSE"} and self._percentage_present(
+                text, metric.value
+            ):
+                violations.append(self._blocking(
+                    "ERROR_METRIC_UNIT_MISSTATED",
+                    f"Do not add a percent sign to {metric.code}; no percent unit is supplied.",
+                ))
+        if evidence.drivers:
+            directional_driver = re.compile(
+                r"\b(?:increasing|decreasing|raises?|reduces?|drives? up|drives? down|"
+                r"artırmak|azaltmak|yükseltir|düşürür)\b",
+                re.IGNORECASE,
+            )
+            if directional_driver.search(text) and not evidence.scenarios:
+                violations.append(self._blocking(
+                    "UNSUPPORTED_DRIVER_DIRECTION",
+                    "Feature importance shows influence strength only; remove increase/decrease direction unless scenario evidence supplies it.",
+                ))
+        return self._deduplicate(violations)
+
+    @staticmethod
+    def _dimension_labels(values: dict[str, Any]) -> list[str]:
+        return [
+            str(value).casefold()
+            for value in values.values()
+            if isinstance(value, (str, int, float))
+            and not re.match(r"^\d{4}-\d{2}(?:-\d{2})?(?:[tT].*)?$", str(value))
+        ]
+
+    @staticmethod
+    def _percentage_present(text: str, value: float) -> bool:
+        for match in re.finditer(r"(?<!\d)(\d+(?:[.,]\d+)?)\s*%", text):
+            try:
+                displayed = float(match.group(1).replace(",", "."))
+            except ValueError:
+                continue
+            decimal_part = re.split(r"[.,]", match.group(1), maxsplit=1)
+            decimals = len(decimal_part[1]) if len(decimal_part) == 2 else 0
+            if abs(displayed - value) <= 0.5 * (10 ** -decimals):
+                return True
+        return False
+
+    @staticmethod
+    def _number_pattern(value: float) -> str:
+        candidates = {
+            f"{value:.0f}", f"{value:.1f}".rstrip("0").rstrip("."),
+            f"{value:.2f}".rstrip("0").rstrip("."),
+        }
+        return "(?:" + "|".join(
+            re.escape(item) for item in sorted(candidates, key=len, reverse=True)
+        ) + ")"
+
+    @classmethod
+    def _percentage_pattern(cls, value: float) -> str:
+        return rf"{cls._number_pattern(value)}\s*%"
+
+    @staticmethod
+    def _deduplicate(items: list[SummaryViolation]) -> list[SummaryViolation]:
+        return list({item.code: item for item in items}.values())
 
 
 class ResultExplainer:
-    MAX_FACTS_JSON = 12_000
-
-    def __init__(self, registry: ProviderRegistry | None = None) -> None:
+    def __init__(
+        self, registry: ProviderRegistry | None = None,
+        evidence_builder: ManagementEvidenceBuilder | None = None,
+        validator: ManagementSummaryValidator | None = None,
+    ) -> None:
         self.registry = registry or ProviderRegistry()
+        self.evidence_builder = evidence_builder or ManagementEvidenceBuilder()
+        self.validator = validator or ManagementSummaryValidator()
 
-    def build_facts(self, command: ExecutionCommand, result: dict[str, Any]) -> SummaryFacts:
-        language = "tr" if command.order.requested_language.lower().startswith("tr") else "en"
-        approved_facts = [
-            ApprovedFact.model_validate({
-                "code": item.get("code"), "labelKey": item.get("labelKey"),
-                "value": (
-                    str(item.get("value"))
-                    if isinstance(item.get("value"), Decimal)
-                    else item.get("value")
-                ),
-                "unit": item.get("unit"),
-            })
-            for item in result.get("kpis", [])[:20]
-            if isinstance(item, dict) and isinstance(item.get("code"), str)
-            and isinstance(
-                item.get("value"), (int, float, Decimal, str, bool, type(None)))
-        ]
-        selected_algorithm = next(
-            (
-                str(fact.value)
-                for fact in approved_facts
-                if fact.code == "SELECTED_ALGORITHM" and isinstance(fact.value, str)
-            ),
-            None,
-        )
-        algorithm = (
-            selected_algorithm or command.order.payload.algorithm
-            if command.execution_type == "ML"
-            else None
-        )
-        warnings = [
-            ApprovedWarning.model_validate({
-                "code": item.get("code"), "messageKey": item.get("messageKey"),
-            })
-            for item in result.get("warnings", [])[:20]
-            if (
-                isinstance(item, dict)
-                and isinstance(item.get("code"), str)
-                and item.get("code") != "RESULT_TRUNCATED"
-            )
-        ]
-        target = None
-        features: list[str] = []
-        if command.execution_type == "ML":
-            target = command.order.payload.target_column
-            features = list(command.order.payload.feature_columns[:20])
-        drivers = self._approved_drivers(result)
-        scenario_objective, scenarios = self._approved_scenarios(result)
-        report_breakdown = self._approved_report_breakdown(command, result)
-        report_highlights = self._approved_report_highlights(result)
-        report_comparisons = self._approved_report_comparisons(
-            command, result, report_breakdown)
-        facts = SummaryFacts(
-            executionType=command.execution_type, language=language,
-            rowCount=result["rowCount"], objective=command.order.request_summary[:500],
-            algorithm=algorithm,
-            target=target, features=features, drivers=drivers,
-            scenarioObjective=scenario_objective, scenarios=scenarios,
-            reportBreakdown=report_breakdown,
-            reportHighlights=report_highlights,
-            reportComparisons=report_comparisons,
-            facts=approved_facts, warnings=warnings)
-        encoded = facts.model_dump_json(by_alias=True)
-        if len(encoded) > self.MAX_FACTS_JSON:
-            raise ValueError("SUMMARY_FACTS_LIMIT_EXCEEDED")
-        return facts
+    def build_facts(
+        self, command: ExecutionCommand, result: dict[str, Any],
+    ) -> ManagementEvidence:
+        return self.evidence_builder.build(command, result)
 
     async def explain(
         self, command: ExecutionCommand, result: dict[str, Any],
     ) -> ExplanationOutcome:
+        evidence = self.build_facts(command, result)
+        generated_at = datetime.now(timezone.utc)
+        provider_name = "UNRESOLVED"
+        provider_model = "UNRESOLVED"
+        repair_attempts = 0
+        draft: ManagementSummaryAudit | None = None
         try:
-            facts = self.build_facts(command, result)
             llm = EffectiveLlmConfiguration.model_validate(command.configuration["llm"])
             provider = self.registry.resolve(llm)
-            language_instruction = (
-                "Write the entire response in concise management-oriented Turkish. "
-                "Do not include an English closing sentence or repeat an instruction phrase "
-                "in English."
-                if facts.language == "tr"
-                else "Write the entire response in concise management-oriented English."
+            provider_name = str(getattr(provider, "name", llm.provider))
+            provider_model = str(getattr(provider, "model", llm.model))
+            logger.info(
+                "management_summary_generation_started executionId=%s executionType=%s "
+                "evidenceVersion=%s "
+                "semanticRegistryVersion=%s provider=%s model=%s",
+                command.execution_id, evidence.execution_type, evidence.schema_version,
+                evidence.semantic_registry_version, provider_name, provider_model,
             )
-            conditional_recommendation_instruction = (
-                "Onaylı senaryo bulguları bir eylemi doğrudan destekliyorsa, "
-                "\"Test edilen varsayımlar altında\" ifadesiyle başlayan, koşullu ve tamamen "
-                "Türkçe tek bir öneri ekle. "
-                if facts.language == "tr"
-                else
-                "When approved scenario facts directly support an action, add one clearly "
-                "conditional recommendation beginning with 'Under the tested assumptions'. "
+            draft, text, validation, repair_attempts = await self._generate_plain_summary(
+                provider, evidence,
             )
-            execution_instruction = (
-                "For a REPORT, approved facts, reportBreakdown, and reportHighlights are "
-                "calculated aggregate business results. reportHighlights identifies the "
-                "leading category in each requested chart after remaining grouped dimensions "
-                "have been aggregated. reportComparisons contains deterministic comparisons "
-                "calculated across the complete governed report result, not merely its browser "
-                "preview. When supplied, identify both the highest and lowest result for the "
-                "primary measure, quantify their absolute or percentage difference, and explain "
-                "whether the leading group is concentrated or the groups are relatively close. "
-                "Use their values to describe the main comparison, range, ranking, or time "
-                "pattern in plain language. You may state these approved "
-                "aggregate values. reportBreakdown contains bounded grouped aggregates, not raw "
-                "source rows. Never claim that governed facts are absent when facts or "
-                "reportBreakdown is non-empty. Summarize the requested comparison without adding "
-                "a directional recommendation or generic what-if discussion. "
-                if facts.execution_type == "REPORT"
-                else
-                "For ML, evaluate the supplied performance facts rather than giving a generic "
-                "statement. Translate them into business language: MAE is the average absolute "
-                "difference in target units, RMSE reflects the typical scale when larger misses "
-                "receive more weight, and R2 is the share of observed variation captured. Mention "
-                "up to three decision-relevant rounded values without using metric abbreviations, "
-                "and never describe "
-                "R2 as probability or confidence. Do not repeat algorithm names, row counts, "
-                "tuning trials, or split details; those are shown elsewhere. Explain a practical "
-                "use that follows from the stated objective, strongest and secondary supplied "
-                "drivers, and the measured reliability. If several approaches were evaluated, "
-                "state only that suitable approaches were compared and the strongest measured "
-                "result was selected; keep implementation names out of the management summary. "
-                "Do not recommend increasing, decreasing, "
-                "raising, reducing, changing, adjusting, maintaining, expanding, or limiting "
-                "any business input unless approved scenario facts directly establish it. "
-                + conditional_recommendation_instruction +
-                "When no scenarios are supplied, do not discuss what-if analysis or directional "
-                "changes; summarize the predictive result that was actually calculated. "
-            )
-            zero_result_instruction = (
-                "The result row count is zero. State clearly that no data matched the request "
-                "and suggest reviewing its filters. Do not describe comparisons, rankings, "
-                "drivers, patterns, performance, or business findings that were not produced. "
-                if facts.row_count == 0 else ""
-            )
-            messages = [
-                {"role": "system", "content": (
-                    "Write a plain-language decision summary for a non-technical manager using "
-                    "only the supplied governed aggregate facts. Lead with what the result means "
-                    "and how it may be used in a business decision. Mention the strongest approved "
-                    "drivers when supplied. Approved warnings are rendered in a separate UI "
-                    "section: do not repeat, paraphrase, or expand them in the summary. Do not "
-                    "invent assumptions about competitors, market stability, demand shifts, "
-                    "costs, profit, or customer behavior. "
-                    + execution_instruction +
-                    "Never convert R2, "
-                    "accuracy, RMSE, or MAE into a probability or confidence percentage. State a "
-                    "probability only when an approved probability fact is explicitly supplied. "
-                    "A currency or measurement unit is itself a governed fact. Never name or "
-                    "infer euros, dollars, lira, or any other currency or unit unless that exact "
-                    "unit is explicitly supplied in a fact unit field. When no unit is supplied, "
-                    "describe the figure only as an amount, value, or result. "
-                    "Do not claim a forecast, causal effect, or guaranteed outcome unless "
-                    "approved scenario facts directly establish it. "
-                    "Write one informative paragraph of at most 140 words. "
-                    "Return only the paragraph text. Do not add headings, labels, Markdown, "
-                    "'Decision Summary', 'Approved Warnings', or a warnings section. "
-                    "Do not infer identifiers, people, customers, raw rows, or unsupported causes. "
-                    + zero_result_instruction + language_instruction)},
-                {"role": "user", "content": json.dumps(
-                    facts.model_dump(by_alias=True, mode="json"),
-                    separators=(",", ":"), ensure_ascii=False)},
+            blocking = draft is None or validation.status == "REJECTED" or not text
+            blocking_issues = [
+                item.code for item in validation.violations
+                if item.severity == ViolationSeverity.BLOCKING
             ]
-            text = self._clean_management_summary(
-                await self._complete(provider, messages)
-            )
-            if not text:
-                raise ProviderError("LLM_SUMMARY_EMPTY")
-            violations = self._management_violations(text)
-            violations.extend(self._grounding_violations(text, facts))
-            violations.extend(self._report_comparison_violations(text, facts))
-            violations.extend(self._unit_grounding_violations(text, facts))
-            violations.extend(self._ml_specificity_violations(text, facts))
-            violations.extend(self._zero_result_violations(text, facts))
-            violations.extend(self._warning_duplication_violations(text, facts))
-            if violations:
-                repair_messages = [
-                    *messages,
-                    {"role": "assistant", "content": text},
-                    {"role": "user", "content": (
-                        "Rewrite the summary. It violated these output rules: "
-                        f"{', '.join(violations)}. Discuss business meaning using only the "
-                        "supplied facts. Do not invent recommendations, probabilities, or "
-                        "forecasts.")},
-                ]
-                text = self._clean_management_summary(
-                    await self._complete(provider, repair_messages)
-                )
-            remaining_violations = (
-                self._management_violations(text)
-                + self._grounding_violations(text, facts)
-                + self._report_comparison_violations(text, facts)
-                + self._unit_grounding_violations(text, facts)
-                + self._ml_specificity_violations(text, facts)
-                + self._zero_result_violations(text, facts)
-                + self._warning_duplication_violations(text, facts)
-                if text else ["empty management summary"]
-            )
-            if remaining_violations:
-                logger.info(
-                    "result_explanation_repair_required executionType=%s violations=%s",
-                    facts.execution_type,
-                    ",".join(sorted(set(remaining_violations))),
-                )
-                grounded_draft = self._grounded_management_fallback(facts)
-                guided_messages = [
-                    *messages,
-                    {"role": "user", "content": (
-                        "The previous responses could not be accepted. Rewrite the supplied "
-                        "fact-grounded draft as the final management summary. Preserve its "
-                        "calculated facts and limitations exactly, but make the wording natural "
-                        "and non-technical. Do not mention this instruction, a draft, validation, "
-                        "or implementation details.\n\nFact-grounded draft:\n"
-                        f"{grounded_draft}")},
-                ]
-                text = self._clean_management_summary(
-                    await self._complete(provider, guided_messages)
-                )
-            final_violations = (
-                self._management_violations(text)
-                + self._grounding_violations(text, facts)
-                + self._report_comparison_violations(text, facts)
-                + self._unit_grounding_violations(text, facts)
-                + self._ml_specificity_violations(text, facts)
-                + self._zero_result_violations(text, facts)
-                + self._warning_duplication_violations(text, facts)
-                if text else ["empty management summary"]
-            )
-            if final_violations:
+            advisory_issues = [
+                item.code for item in validation.violations
+                if item.severity == ViolationSeverity.ADVISORY
+            ]
+            if blocking or draft is None or not text:
                 logger.warning(
-                    "result_explanation_rejected code=SUMMARY_OUTPUT_INVALID "
-                    "executionType=%s violations=%s",
-                    facts.execution_type,
-                    ",".join(sorted(set(final_violations))),
+                    "management_summary_rejected code=SUMMARY_PROSE_UNSAFE "
+                    "executionId=%s executionType=%s repairAttempts=%s violations=%s",
+                    command.execution_id, evidence.execution_type,
+                    repair_attempts,
+                    ",".join(item.code for item in validation.violations),
                 )
-                return ExplanationOutcome(status="FAILED")
-            return ExplanationOutcome(status="COMPLETED", text=text)
-        except (ProviderError, ValueError, KeyError) as exception:
+                return ExplanationOutcome(
+                    status="FAILED", evidence=evidence, validationStatus="REJECTED",
+                    validationIssues=[item.code for item in validation.violations],
+                    blockingIssues=blocking_issues, advisoryIssues=advisory_issues,
+                    summaryAudit=draft, repairAttemptCount=repair_attempts,
+                    provider=provider_name, providerModel=provider_model,
+                    generatedAt=generated_at,
+                )
+            if validation.violations:
+                logger.info(
+                    "management_summary_accepted_with_advisories executionType=%s "
+                    "executionId=%s repairAttempts=%s violations=%s",
+                    evidence.execution_type, command.execution_id,
+                    repair_attempts,
+                    ",".join(item.code for item in validation.violations),
+                )
+            else:
+                logger.info(
+                    "management_summary_accepted executionId=%s executionType=%s "
+                    "repairAttempts=%s",
+                    command.execution_id, evidence.execution_type, repair_attempts,
+                )
+            return ExplanationOutcome(
+                status="COMPLETED", text=text, evidence=evidence,
+                validationStatus=validation.status,
+                validationIssues=[item.code for item in validation.violations],
+                blockingIssues=blocking_issues, advisoryIssues=advisory_issues,
+                summaryAudit=draft, repairAttemptCount=repair_attempts,
+                provider=provider_name, providerModel=provider_model,
+                generatedAt=generated_at,
+            )
+        except (ProviderError, ValidationError, ValueError, KeyError) as exception:
             logger.warning(
-                "result_explanation_failed code=SUMMARY_GENERATION_FAILED "
-                "exceptionType=%s",
+                "management_summary_provider_failed code=SUMMARY_GENERATION_FAILED "
+                "executionId=%s executionType=%s provider=%s model=%s exceptionType=%s",
+                command.execution_id, evidence.execution_type, provider_name, provider_model,
                 type(exception).__name__,
             )
-            return ExplanationOutcome(status="FAILED")
+            return ExplanationOutcome(
+                status="FAILED", evidence=evidence, validationStatus="PROVIDER_FAILED",
+                validationIssues=["SUMMARY_PROVIDER_FAILED"],
+                blockingIssues=["SUMMARY_PROVIDER_FAILED"], advisoryIssues=[],
+                summaryAudit=draft, repairAttemptCount=repair_attempts,
+                provider=provider_name, providerModel=provider_model,
+                generatedAt=generated_at,
+            )
+
 
     @staticmethod
-    def _clean_management_summary(text: str) -> str:
-        """Remove provider-added presentation labels from manager-facing prose."""
-        cleaned = re.sub(
-            r"^\s*(?:\*\*)?(?:decision summary|management summary|"
-            r"karar özeti|yönetici özeti)(?:\*\*)?\s*:?\s*",
+    def _merge_validations(*validations: SummaryValidation) -> SummaryValidation:
+        violations = list({
+            item.code: item
+            for validation in validations
+            for item in validation.violations
+        }.values())
+        status = (
+            "REJECTED"
+            if any(item.severity == ViolationSeverity.BLOCKING for item in violations)
+            else "ACCEPTED_WITH_ADVISORIES" if violations else "ACCEPTED"
+        )
+        return SummaryValidation(status=status, violations=violations)
+
+    async def _generate_plain_summary(
+        self, provider, evidence: ManagementEvidence,
+    ) -> tuple[
+        ManagementSummaryAudit | None, str, SummaryValidation, int,
+    ]:
+        """Generate provider prose without delegating typed claim metadata to the model."""
+        indexed = evidence_index(evidence)
+        evidence_ids = list(indexed)
+        empty_validation = SummaryValidation(status="REJECTED", violations=[])
+        if not evidence_ids:
+            return None, "", empty_validation, 0
+        facts = [indexed[evidence_id] for evidence_id in evidence_ids]
+        calculated_result = evidence.model_dump(by_alias=True, mode="json")
+        prior_prose = ""
+        validation = empty_validation
+        candidate: ManagementSummaryAudit | None = None
+        for attempt in range(2):
+            payload = {
+                "language": evidence.language,
+                "originalRequest": evidence.objective,
+                "calculatedResult": calculated_result,
+                "previousProse": prior_prose or None,
+                "validationIssues": [
+                    item.model_dump(by_alias=True, mode="json")
+                    for item in validation.violations
+                ] if attempt else [],
+                "outputSchema": ProviderManagementProse.model_json_schema(by_alias=True),
+            }
+            messages = [{
+                "role": "system",
+                "content": (
+                    "Write the final management summary as prose for a non-technical business "
+                    "reader. Return exactly one JSON object matching outputSchema. The service "
+                    "owns all claim metadata; you write only prose. Directly answer "
+                    "originalRequest using only calculatedResult. Cover every measure and "
+                    "comparison requested when calculatedResult supplies it. For grouped reports, "
+                    "use reportBreakdown to compare the actual categories instead of making vague "
+                    "claims. For machine learning, explain what the calculated estimates or "
+                    "classifications can support. Use every supplied ML result that helps answer "
+                    "the request: evaluated indicators and their businessDefinition, selected "
+                    "approach and comparison facts, input fields, model-reliance fields, and "
+                    "calculated scenarios. When the request asks for the selected method or "
+                    "reliability indicators, state them and translate their meaning into plain "
+                    "business language. Do not merely repeat the request or say that supplied "
+                    "details are unavailable. Avoid an implementation diary: do not explain "
+                    "training mechanics, tuning mechanics, data-split mechanics, Spark, or code. "
+                    "Do not invent units, currencies, causes, directionality, recommendations, "
+                    "threshold judgments, or facts. Do not repeat interface warnings. Preserve "
+                    "governed display labels exactly. Do not impose or target a response length."
+                ),
+            }, {
+                "role": "user",
+                "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            }]
+            try:
+                raw = await self._complete(provider, messages)
+                prior_prose = self._clean(self._parse_prose_repair(raw).prose)
+            except ProviderError:
+                raise
+            except (ValidationError, ValueError, json.JSONDecodeError):
+                logger.warning(
+                    "management_summary_plain_recovery_parse_failed attempt=%s", attempt + 1,
+                )
+                continue
+            candidate = ManagementSummaryAudit(
+                schemaVersion="2.0", language=evidence.language, prose=prior_prose,
+                evidenceIds=evidence_ids, scope=expected_scope(facts),
+            )
+            # Audit metadata is service-owned; the provider supplies only the prose.
+            validation = self.validator.validate(prior_prose, evidence)
+            if validation.status != "REJECTED":
+                if attempt:
+                    validation = self._merge_validations(
+                        validation,
+                        SummaryValidation(
+                            status="ACCEPTED_WITH_ADVISORIES",
+                            violations=[SummaryViolation(
+                                code="SUMMARY_PROSE_REPAIRED",
+                                severity=ViolationSeverity.ADVISORY,
+                                repairInstruction=(
+                                    "The provider corrected its prose using service-supplied "
+                                    "semantic validation feedback."
+                                ),
+                            )],
+                        ),
+                    )
+                return candidate, prior_prose, validation, attempt
+        # Some OpenAI-compatible providers repeat the generic word "unit" even after
+        # receiving a precise repair instruction.  Removing that word after an approved
+        # numeric value cannot create a new fact or change the value's meaning; it only
+        # restores the unitless semantics already present in the evidence contract.
+        # Revalidation remains mandatory, so every other unsupported assertion still
+        # rejects the summary.
+        if validation.status == "REJECTED" and {
+            item.code for item in validation.violations
+            if item.severity == ViolationSeverity.BLOCKING
+        } == {"UNAPPROVED_UNIT"}:
+            normalized = self._remove_generic_unit_after_number(prior_prose)
+            if normalized != prior_prose:
+                normalized_validation = self.validator.validate(normalized, evidence)
+                if normalized_validation.status != "REJECTED":
+                    candidate = candidate.model_copy(deep=True) if candidate else None
+                    if candidate:
+                        candidate.prose = normalized
+                    normalized_validation = self._merge_validations(
+                        normalized_validation,
+                        SummaryValidation(
+                            status="ACCEPTED_WITH_ADVISORIES",
+                            violations=[SummaryViolation(
+                                code="UNAPPROVED_GENERIC_UNIT_REMOVED",
+                                severity=ViolationSeverity.ADVISORY,
+                                repairInstruction=(
+                                    "The service removed a provider-invented generic unit word "
+                                    "and revalidated the otherwise unchanged prose."
+                                ),
+                            )],
+                        ),
+                    )
+                    return candidate, normalized, normalized_validation, 1
+        salvaged = self._validated_sentence_subset(prior_prose, evidence)
+        if salvaged and salvaged != prior_prose:
+            salvaged_validation = self.validator.validate(salvaged, evidence)
+            if salvaged_validation.status != "REJECTED":
+                candidate = candidate.model_copy(deep=True) if candidate else None
+                if candidate:
+                    candidate.prose = salvaged
+                salvaged_validation = self._merge_validations(
+                    salvaged_validation,
+                    SummaryValidation(
+                        status="ACCEPTED_WITH_ADVISORIES",
+                        violations=[SummaryViolation(
+                            code="UNSAFE_PROVIDER_SENTENCES_EXCLUDED",
+                            severity=ViolationSeverity.ADVISORY,
+                            repairInstruction=(
+                                "The service retained only provider-written sentences that "
+                                "independently and collectively passed evidence validation."
+                            ),
+                        )],
+                    ),
+                )
+                return candidate, salvaged, salvaged_validation, 1
+        return candidate, prior_prose, validation, 1
+
+    @staticmethod
+    def _remove_generic_unit_after_number(text: str) -> str:
+        return re.sub(
+            r"(?<=\d)\s+(?:units?|birim(?:ler|i)?)\b",
             "",
             text,
             flags=re.IGNORECASE,
         )
-        cleaned = re.split(
-            r"\s*(?:\*\*)?(?:approved warnings|onaylı uyarılar)"
-            r"(?:\*\*)?\s*:?\s*",
-            cleaned,
-            maxsplit=1,
-            flags=re.IGNORECASE,
-        )[0]
-        return cleaned.replace("**", "").replace("__", "").strip()
 
-    @staticmethod
-    def _approved_drivers(result: dict[str, Any]) -> list[ApprovedDriver]:
-        for chart in result.get("charts", [])[:10]:
-            if not isinstance(chart, dict) or chart.get("chartId") != "feature-importance":
-                continue
-            categories = chart.get("categories")
-            series = chart.get("series")
-            if (
-                not isinstance(categories, list)
-                or not isinstance(series, list)
-                or not series
-                or not isinstance(series[0], dict)
-                or not isinstance(series[0].get("data"), list)
-            ):
-                return []
-            drivers = [
-                ApprovedDriver(feature=feature, importance=float(importance))
-                for feature, importance in zip(
-                    categories[:10], series[0]["data"][:10], strict=False)
-                if isinstance(feature, str)
-                and isinstance(importance, (int, float))
-                and not isinstance(importance, bool)
-                and importance >= 0
-            ]
-            return sorted(drivers, key=lambda item: item.importance, reverse=True)
-        return []
-
-    @staticmethod
-    def _approved_scenarios(
-        result: dict[str, Any],
-    ) -> tuple[str | None, list[ApprovedScenario]]:
-        for chart in result.get("charts", [])[:5]:
-            if not isinstance(chart, dict) or chart.get("chartId") != "what-if-analysis":
-                continue
-            objective = chart.get("objective")
-            if objective not in {"MAXIMIZE_TARGET", "MINIMIZE_TARGET"}:
-                return None, []
-            approved = []
-            for item in chart.get("scenarioFacts", [])[:6]:
-                if not isinstance(item, dict) or not isinstance(item.get("code"), str):
-                    continue
-                changes = [
-                    ApprovedScenarioChange.model_validate(change)
-                    for change in item.get("changes", [])[:3]
-                    if isinstance(change, dict)
-                ]
-                delta = item.get("deltaPercent")
-                if changes and isinstance(delta, (int, float)) and not isinstance(delta, bool):
-                    approved.append(ApprovedScenario(
-                        code=item["code"], changes=changes, deltaPercent=float(delta)))
-            return objective, approved
-        return None, []
-
-    @staticmethod
-    def _approved_report_breakdown(
-        command: ExecutionCommand, result: dict[str, Any],
-    ) -> list[ApprovedReportBreakdown]:
-        if command.execution_type != "REPORT" or not command.order.payload.aggregations:
-            return []
-        temporal_aliases = {
-            item.alias for item in command.order.payload.temporal_group_by
-        }
-        dimension_aliases = [
-            item.alias or item.column
-            for item in command.order.payload.select
-            if item.column in command.order.payload.group_by
-            or (item.alias or item.column) in temporal_aliases
+    def _validated_sentence_subset(
+        self, text: str, evidence: ManagementEvidence,
+    ) -> str:
+        sentences = [
+            item.strip() for item in re.split(r"(?<=[.!?])\s+", text.strip())
+            if item.strip()
         ]
-        measure_aliases = [
-            item.alias for item in command.order.payload.aggregations
+        accepted = [
+            sentence for sentence in sentences
+            if self.validator.validate(sentence, evidence).status != "REJECTED"
         ]
-        preview = result.get("preview")
-        rows = preview.get("rows") if isinstance(preview, dict) else None
-        if not isinstance(rows, list):
-            return []
+        if not accepted or len(accepted) == len(sentences):
+            return ""
+        candidate = " ".join(accepted)
+        return candidate if self.validator.validate(candidate, evidence).status != "REJECTED" else ""
 
-        def approved(values: dict[str, Any], names: list[str]) -> dict[str, Any]:
-            return {
-                name: (
-                    str(values[name])
-                    if isinstance(values[name], Decimal)
-                    else values[name]
-                )
-                for name in names
-                if name in values
-                and isinstance(
-                    values[name], (int, float, Decimal, str, bool, type(None)))
-            }
-
-        return [
-            ApprovedReportBreakdown(
-                dimensions=approved(row, dimension_aliases),
-                measures=approved(row, measure_aliases),
+    @staticmethod
+    def _parse_prose_repair(value: str) -> ProviderManagementProse:
+        cleaned = value.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(
+                r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE,
             )
-            for row in rows[:10]
-            if isinstance(row, dict)
-        ]
-
-    @staticmethod
-    def _approved_report_highlights(
-        result: dict[str, Any],
-    ) -> list[ApprovedReportHighlight]:
-        highlights = []
-        for chart in result.get("charts", [])[:10]:
-            if not isinstance(chart, dict):
-                continue
-            categories = chart.get("categories")
-            series = chart.get("series")
-            category_field = chart.get("categoryField")
-            chart_type = chart.get("type")
-            if (
-                not isinstance(categories, list)
-                or not isinstance(series, list)
-                or not isinstance(category_field, str)
-                or not isinstance(chart_type, str)
-            ):
-                continue
-            totals = [0.0 for _ in categories]
-            found = False
-            for item in series:
-                if not isinstance(item, dict) or not isinstance(item.get("data"), list):
-                    continue
-                for index, value in enumerate(item["data"][:len(categories)]):
-                    numeric = ResultExplainer._numeric_value(value)
-                    if numeric is not None:
-                        totals[index] += numeric
-                        found = True
-            if not found or not totals:
-                continue
-            leading_index = max(range(len(totals)), key=totals.__getitem__)
-            category = categories[leading_index]
-            if category is None:
-                continue
-            highlights.append(ApprovedReportHighlight(
-                chartType=chart_type,
-                categoryField=category_field,
-                leadingCategory=str(category),
-                value=totals[leading_index],
-            ))
-        return highlights
-
-    @staticmethod
-    def _approved_report_comparisons(
-        command: ExecutionCommand,
-        result: dict[str, Any],
-        breakdown: list[ApprovedReportBreakdown],
-    ) -> list[ApprovedReportComparison]:
-        if command.execution_type != "REPORT":
-            return []
-        internal = result.get("summaryFacts")
-        supplied = internal.get("reportComparisons") if isinstance(internal, dict) else None
-        if isinstance(supplied, list):
-            return [
-                ApprovedReportComparison.model_validate(item)
-                for item in supplied[:5] if isinstance(item, dict)
-            ]
-        if len(breakdown) < 2:
-            return []
-        comparisons = []
-        for measure in list(breakdown[0].measures)[:5]:
-            numeric = [
-                (item, number)
-                for item in breakdown
-                if (number := ResultExplainer._numeric_value(
-                    item.measures.get(measure))) is not None
-            ]
-            if len(numeric) < 2:
-                continue
-            highest, highest_value = max(numeric, key=lambda item: item[1])
-            lowest, lowest_value = min(numeric, key=lambda item: item[1])
-            difference = highest_value - lowest_value
-            total = sum(value for _, value in numeric)
-            comparisons.append(ApprovedReportComparison(
-                measure=measure,
-                highestDimensions=highest.dimensions,
-                highestValue=highest_value,
-                lowestDimensions=lowest.dimensions,
-                lowestValue=lowest_value,
-                absoluteDifference=difference,
-                percentageDifference=(
-                    difference / abs(lowest_value) * 100 if lowest_value != 0 else None
-                ),
-                highestSharePercent=(
-                    highest_value / total * 100
-                    if total > 0 and lowest_value >= 0 else None
-                ),
-                groupCount=len(numeric),
-            ))
-        return comparisons
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start < 0 or end < start:
+            raise ValueError("management summary did not return a JSON object")
+        return ProviderManagementProse.model_validate_json(cleaned[start:end + 1])
 
     @staticmethod
     async def _complete(provider, messages: list[dict[str, str]]) -> str:
+        complete_json = getattr(provider, "complete_json", None)
+        if callable(complete_json):
+            system = messages[0]["content"]
+            conversation = "\n\n".join(
+                f"{message['role'].upper()}:\n{message['content']}"
+                for message in messages[1:]
+            )
+            value = await complete_json(system, conversation)
+            return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
         chunks = []
-        length = 0
         async for chunk in provider.stream(messages):
-            length += len(chunk)
-            if length > 4000:
-                raise ProviderError("LLM_SUMMARY_TOO_LARGE")
             chunks.append(chunk)
         return "".join(chunks).strip()
 
     @staticmethod
-    def _management_violations(text: str) -> list[str]:
-        violations = []
-        if len(text.split()) > 140:
-            violations.append("maximum 140 words")
-        technical = re.compile(
-            r"\b(?:regressor|classifier|hyperparameters?|tuning trials?|"
-            r"training split|validation split|test[- ]set|r2|rmse|mae|gbt|xgboost|"
-            r"random forest|decision tree|linear regression|"
-            r"governed facts?|reportbreakdown)\b|r²",
-            re.IGNORECASE,
+    def _clean(text: str) -> str:
+        cleaned = re.sub(
+            r"^\s*(?:\*\*)?(?:decision summary|management summary|karar özeti|"
+            r"yönetici özeti)(?:\*\*)?\s*:?\s*",
+            "", text, flags=re.IGNORECASE,
         )
-        if technical.search(text):
-            violations.append("no technical implementation or metric terminology")
-        unsupported = re.compile(
-            r"\b(?:guarantees|will definitely increase|will definitely decrease)\b",
-            re.IGNORECASE,
-        )
-        if unsupported.search(text):
-            violations.append("no unsupported forecast, guarantee, or business recommendation")
-        return violations
-
-    @staticmethod
-    def _grounding_violations(text: str, facts: SummaryFacts) -> list[str]:
-        if (
-            facts.execution_type != "REPORT"
-            or not (facts.facts or facts.report_breakdown or facts.report_highlights)
-        ):
-            return []
-        empty_claim = re.compile(
-            r"\b(?:does not contain any|contains no|without any|absence of|lacks?)\b"
-            r".{0,35}\b(?:governed facts?|aggregate data|quantitative measures?|"
-            r"calculated values?|report results?)\b|"
-            r"\bwithout (?:specific )?quantitative measures?\b|"
-            r"\blacks? concrete (?:performance )?metrics?\b|"
-            r"\bno approved drivers? or quantitative facts? (?:are|is) provided\b|"
-            r"(?:somut veri sonuçlarını içermez|veri seti boştur?|veri setinin eksik olması|"
-            r"hiçbir (?:yönetilen|hesaplanmış|sayısal|nicel).{0,30}(?:veri|değer|sonuç)"
-            r".{0,20}(?:bulunmamaktadır|yoktur))",
-            re.IGNORECASE,
-        )
-        return ["use the supplied governed report facts"] if empty_claim.search(text) else []
-
-    @staticmethod
-    def _report_comparison_violations(text: str, facts: SummaryFacts) -> list[str]:
-        if facts.execution_type != "REPORT" or not facts.report_comparisons:
-            return []
-        comparison = facts.report_comparisons[0]
-
-        def searchable_labels(values: dict[str, Any]) -> list[str]:
-            return [
-                str(value).casefold()
-                for value in values.values()
-                if isinstance(value, (str, int, float))
-                and not re.match(r"^\d{4}-\d{2}(?:-\d{2})?(?:[tT].*)?$", str(value))
-            ]
-
-        normalized = text.casefold()
-        highest = searchable_labels(comparison.highest_dimensions)
-        lowest = searchable_labels(comparison.lowest_dimensions)
-        if highest and not any(label in normalized for label in highest):
-            return ["identify the highest group from reportComparisons"]
-        if lowest and not any(label in normalized for label in lowest):
-            return ["identify the lowest group from reportComparisons"]
-        return []
-
-    @staticmethod
-    def _unit_grounding_violations(text: str, facts: SummaryFacts) -> list[str]:
-        """Reject currencies unless an approved KPI explicitly supplies that unit."""
-        supplied_units = " ".join(
-            fact.unit for fact in facts.facts if isinstance(fact.unit, str)
-        )
-        currencies = (
-            r"\b(?:eur|euro\w*|avro\w*)\b|€",
-            r"\b(?:usd|dollar\w*|dolar\w*)\b|\$",
-            r"\b(?:try|tl|turkish lira|türk lirası\w*|lira\w*)\b|₺",
-            r"\b(?:gbp|pounds? sterling|sterlin\w*)\b|£",
-            r"\b(?:jpy|yen)\b|¥",
-            r"\b(?:cny|yuan|renminbi)\b",
-        )
-        unsupported = any(
-            re.search(pattern, text, re.IGNORECASE)
-            and not re.search(pattern, supplied_units, re.IGNORECASE)
-            for pattern in currencies
-        )
-        return (
-            ["do not invent a currency or unit absent from approved fact units"]
-            if unsupported else []
-        )
-
-    @staticmethod
-    def _warning_duplication_violations(
-        text: str, facts: SummaryFacts,
-    ) -> list[str]:
-        warning_codes = {warning.code for warning in facts.warnings}
-        if "WHAT_IF_NOT_CAUSAL" not in warning_codes:
-            return []
-        duplicated_warning = re.compile(
-            r"\b(?:caus(?:al|ation)|does not prove|controlled experiment|"
-            r"real[- ]world effects?|market conditions?|competitors?|demand shifts?|"
-            r"customer behavior|not (?:a )?guarantee|cannot guarantee|"
-            r"nedensel(?:lik)?|neden[- ]sonuç|garanti|kontrollü deney|"
-            r"piyasa koşulları|rakip(?:ler)?|talep değiş(?:imi|iklikleri))\b",
-            re.IGNORECASE,
-        )
-        return (
-            ["do not repeat or expand warnings rendered separately"]
-            if duplicated_warning.search(text) else []
-        )
-
-    @staticmethod
-    def _ml_specificity_violations(
-        text: str, facts: SummaryFacts,
-    ) -> list[str]:
-        if facts.execution_type != "ML":
-            return []
-        performance_codes = {
-            "RMSE", "MAE", "R2", "ACCURACY", "F1", "PRECISION", "RECALL", "AUC",
-        }
-        has_performance_values = any(
-            fact.code in performance_codes
-            and ResultExplainer._numeric_value(fact.value) is not None
-            for fact in facts.facts
-        )
-        return (
-            ["include a rounded, plain-language interpretation of measured performance"]
-            if has_performance_values and not re.search(r"\d", text)
-            else []
-        )
-
-    @staticmethod
-    def _zero_result_violations(text: str, facts: SummaryFacts) -> list[str]:
-        if facts.row_count != 0:
-            return []
-        no_data = re.compile(
-            r"\b(?:no (?:matching )?data|returned no data|zero rows|no results?)\b|"
-            r"(?:eşleşen veri bulunamadı|veri döndürmedi|sonuç bulunamadı|sıfır satır)",
-            re.IGNORECASE,
-        )
-        return (
-            ["state that no data matched and do not describe nonexistent findings"]
-            if not no_data.search(text) else []
-        )
-
-    @staticmethod
-    def _numeric_value(value: Any) -> float | None:
-        if isinstance(value, bool) or value is None:
-            return None
-        try:
-            number = Decimal(str(value))
-        except (InvalidOperation, ValueError):
-            return None
-        return float(number) if number.is_finite() else None
-
-    @staticmethod
-    def _display_number(value: float, language: str) -> str:
-        rendered = f"{value:,.2f}".rstrip("0").rstrip(".")
-        if language == "tr":
-            rendered = rendered.replace(",", "\0").replace(".", ",").replace("\0", ".")
-        return rendered
-
-    @staticmethod
-    def _grounded_management_fallback(facts: SummaryFacts) -> str:
-        if facts.row_count == 0:
-            return (
-                "Bu istekle eşleşen veri bulunamadı. Filtreleri veya istek kapsamını "
-                "gözden geçirip yeniden deneyin. Karşılaştırılacak bir sonuç oluşmadı."
-                if facts.language == "tr"
-                else
-                "No data matched this request. Review its filters or scope and try again. "
-                "No comparison or business finding was produced."
-            )
-        if facts.execution_type == "REPORT":
-            if facts.report_comparisons:
-                comparison = facts.report_comparisons[0]
-                highest = ", ".join(
-                    str(value) for value in comparison.highest_dimensions.values()
-                ) or "the leading group"
-                lowest = ", ".join(
-                    str(value) for value in comparison.lowest_dimensions.values()
-                ) or "the lowest group"
-                measure = comparison.measure.replace("_", " ")
-                high_value = ResultExplainer._display_number(
-                    comparison.highest_value, facts.language)
-                low_value = ResultExplainer._display_number(
-                    comparison.lowest_value, facts.language)
-                difference = ResultExplainer._display_number(
-                    comparison.absolute_difference, facts.language)
-                percentage = (
-                    ResultExplainer._display_number(
-                        comparison.percentage_difference, facts.language)
-                    if comparison.percentage_difference is not None else None
-                )
-                share = (
-                    ResultExplainer._display_number(
-                        comparison.highest_share_percent, facts.language)
-                    if comparison.highest_share_percent is not None else None
-                )
-                if facts.language == "tr":
-                    spread = (
-                        f" Aradaki fark {difference} (%{percentage})."
-                        if percentage is not None else f" Aradaki fark {difference}."
-                    )
-                    concentration = (
-                        f" Lider grubun {comparison.group_count} grup içindeki payı %{share}."
-                        if share is not None else ""
-                    )
-                    return (
-                        f"{measure} karşılaştırmasında en yüksek sonuç {highest} için "
-                        f"{high_value}, en düşük sonuç ise {lowest} için {low_value}."
-                        f"{spread}{concentration} Bu görünüm, güçlü ve geliştirilmesi gereken "
-                        "grupları aynı ölçüte göre önceliklendirmek için kullanılabilir."
-                    )
-                spread = (
-                    f" The difference is {difference} ({percentage}%)."
-                    if percentage is not None else f" The difference is {difference}."
-                )
-                concentration = (
-                    f" The leader represents {share}% across {comparison.group_count} groups."
-                    if share is not None else ""
-                )
-                return (
-                    f"For {measure}, {highest} is highest at {high_value}, while {lowest} is "
-                    f"lowest at {low_value}.{spread}{concentration} This comparison can help "
-                    "management prioritize the strongest groups and those requiring attention "
-                    "using the same measure."
-                )
-            if facts.report_highlights:
-                rendered = "; ".join(
-                    f"{item.category_field.replace('_', ' ')}: "
-                    f"{item.leading_category} "
-                    f"({ResultExplainer._display_number(item.value, facts.language)})"
-                    for item in facts.report_highlights[:3]
-                )
-                if facts.language == "tr":
-                    return (
-                        f"İstenen karşılaştırmada öne çıkan sonuçlar: {rendered}. "
-                        "Bu toplu görünüm, en yoğun dönemleri ve grupları aynı ölçüte göre "
-                        "karşılaştırmak için kullanılabilir."
-                    )
-                return (
-                    f"The leading results in the requested comparisons are {rendered}. "
-                    "This aggregate view can be used to compare the busiest periods and "
-                    "groups using the same measure."
-                )
-            breakdown = [
-                item for item in facts.report_breakdown if item.measures
-            ]
-            if breakdown:
-                measure = next(iter(breakdown[0].measures))
-                numeric = [
-                    (item, number)
-                    for item in breakdown
-                    if (number := ResultExplainer._numeric_value(
-                        item.measures.get(measure))) is not None
-                ]
-                if numeric:
-                    highest, highest_value = max(numeric, key=lambda item: item[1])
-                    displayed_value = ResultExplainer._display_number(
-                        highest_value, facts.language)
-                    dimension = (
-                        next(iter(highest.dimensions.values()))
-                        if highest.dimensions else None
-                    )
-                    label = measure.replace("_", " ")
-                    secondary = next(
-                        (
-                            (name, number)
-                            for name, value in highest.measures.items()
-                            if name != measure
-                            and (number := ResultExplainer._numeric_value(value)) is not None
-                        ),
-                        None,
-                    )
-                    secondary_text = (
-                        f" {secondary[0].replace('_', ' ')}: "
-                        f"{ResultExplainer._display_number(secondary[1], facts.language)}."
-                        if secondary else ""
-                    )
-                    if facts.language == "tr":
-                        leader = (
-                            f" En yüksek {label} değeri {dimension} için "
-                            f"{displayed_value} olarak hesaplandı.{secondary_text}"
-                            if dimension is not None else
-                            f" Hesaplanan {label} değeri {displayed_value}.{secondary_text}"
-                        )
-                        return (
-                            f"Analiz {len(breakdown)} karşılaştırılabilir toplu sonuç üretti."
-                            f"{leader} Bu görünüm, kapsamdaki grupları aynı ölçüte göre "
-                            "karşılaştırmak için kullanılabilir. Sonuç yalnızca seçilen veri, "
-                            "tarih aralığı ve filtreleri yansıtır."
-                        )
-                    leader = (
-                        f" The highest {label} is {displayed_value} for {dimension}."
-                        f"{secondary_text}"
-                        if dimension is not None else
-                        f" The calculated {label} is {displayed_value}.{secondary_text}"
-                    )
-                    return (
-                        f"The analysis produced {len(breakdown)} comparable aggregate results."
-                        f"{leader} This view supports comparison of the in-scope groups using "
-                        "the same measure. The result reflects only the selected data, period, "
-                        "and filters."
-                    )
-            if facts.language == "tr":
-                return (
-                    "İstenen analiz tamamlandı ve doğrulanmış göstergeler karar desteği için "
-                    "hazır. Ayrıntılı sonuç kartları karşılaştırılması gereken değerleri gösterir. "
-                    "Sonuç yalnızca seçilen veri ve koşulları yansıtır; kapsam dışındaki dönemler "
-                    "veya etkenler hakkında çıkarım yapmaz."
-                )
-            return (
-                "The requested analysis is complete and its governed indicators are ready for "
-                "decision support. The detailed result cards show the values available for "
-                "comparison. The result reflects only the selected data and conditions; it does "
-                "not establish conclusions about periods or factors outside that scope."
-            )
-        if facts.scenarios and facts.scenario_objective:
-            selected = (
-                max(facts.scenarios, key=lambda item: item.delta_percent)
-                if facts.scenario_objective == "MAXIMIZE_TARGET"
-                else min(facts.scenarios, key=lambda item: item.delta_percent)
-            )
-            opposite = (
-                min(facts.scenarios, key=lambda item: item.delta_percent)
-                if facts.scenario_objective == "MAXIMIZE_TARGET"
-                else max(facts.scenarios, key=lambda item: item.delta_percent)
-            )
-            target = (facts.target or "requested outcome").replace("_", " ")
-            if facts.language == "tr":
-                changes = ", ".join(
-                    f"{item.column.replace('_', ' ')} değerinin göreli olarak "
-                    f"%{abs(item.percent_change):g} "
-                    f"{'artırıldığı' if item.percent_change > 0 else 'azaltıldığı'}"
-                    for item in selected.changes
-                )
-                return (
-                    f"Test edilen varsayımlar altında {changes} senaryosu, beklenen {target} "
-                    f"sonucunda başlangıca göre %{selected.delta_percent:+.2f} ile incelenen "
-                    "seçenekler arasındaki en güçlü sonucu sağladı. En zayıf senaryonun farkı "
-                    f"%{opposite.delta_percent:+.2f} oldu. Yönetim güçlü seçeneği genel "
-                    "bir değişiklik olarak hemen uygulamak yerine, sınırlı bir pilot uygulamada "
-                    "öncelikle test edebilir."
-                )
-            changes = ", ".join(
-                f"{item.column.replace('_', ' ')} was relatively "
-                f"{'increased' if item.percent_change > 0 else 'reduced'} by "
-                f"{abs(item.percent_change):g}%"
-                for item in selected.changes
-            )
-            return (
-                f"Under the tested assumptions, the {changes} scenario produced the strongest "
-                f"result for expected {target} among the options examined: "
-                f"{selected.delta_percent:+.2f}% versus the baseline; the weakest scenario was "
-                f"{opposite.delta_percent:+.2f}%. Management can prioritize "
-                "this option for a limited, controlled business test rather than apply it "
-                "company-wide immediately."
-            )
-        drivers = [
-            item.feature.replace("_", " ").strip()
-            for item in facts.drivers[:3]
-        ]
-        target = (facts.target or "requested outcome").replace("_", " ")
-        mae = next(
-            (
-                ResultExplainer._numeric_value(item.value)
-                for item in facts.facts if item.code == "MAE"
-            ),
-            None,
-        )
-        rmse = next(
-            (
-                ResultExplainer._numeric_value(item.value)
-                for item in facts.facts if item.code == "RMSE"
-            ),
-            None,
-        )
-        r2 = next(
-            (
-                ResultExplainer._numeric_value(item.value)
-                for item in facts.facts if item.code == "R2"
-            ),
-            None,
-        )
-        performance = []
-        if mae is not None:
-            performance.append(
-                f"ortalama mutlak tahmin farkı {ResultExplainer._display_number(mae, 'tr')}"
-                if facts.language == "tr"
-                else f"average absolute prediction difference is "
-                f"{ResultExplainer._display_number(mae, 'en')}"
-            )
-        if rmse is not None:
-            performance.append(
-                f"büyük sapmalara daha duyarlı fark {ResultExplainer._display_number(rmse, 'tr')}"
-                if facts.language == "tr"
-                else f"the larger-error-sensitive difference is "
-                f"{ResultExplainer._display_number(rmse, 'en')}"
-            )
-        if r2 is not None:
-            captured = ResultExplainer._display_number(r2 * 100, facts.language)
-            performance.append(
-                f"gözlenen değişimin %{captured} kadarı yakalanıyor"
-                if facts.language == "tr"
-                else f"{captured}% of observed variation is captured"
-            )
-        if facts.language == "tr":
-            driver_text = (
-                f"Sonucu en çok {', '.join(drivers[:2])}"
-                + (f"; daha sınırlı olarak {drivers[2]}" if len(drivers) > 2 else "")
-                + " etkiliyor."
-                if drivers else ""
-            )
-            return (
-                f"{target} tahmini tamamlandı: {'; '.join(performance)}. "
-                f"{driver_text} Sonuç, beklenen değerleri karşılaştırmak ve olağandışı sapmaları "
-                "incelemek için kullanılabilir."
-            ).strip()
-        driver_text = (
-            f"The strongest influences are {', '.join(drivers[:2])}"
-            + (f", with {drivers[2]} having a smaller influence" if len(drivers) > 2 else "")
-            + "."
-            if drivers else ""
-        )
-        return (
-            f"The {target} prediction is complete: {'; '.join(performance)}. "
-            f"{driver_text} The result can be used to compare expected values and identify "
-            "unusual differences that deserve review."
-        ).strip()
+        cleaned = re.split(
+            r"\s*(?:\*\*)?(?:approved warnings|onaylı uyarılar)(?:\*\*)?\s*:?\s*",
+            cleaned, maxsplit=1, flags=re.IGNORECASE,
+        )[0]
+        return cleaned.replace("**", "").replace("__", "").strip()

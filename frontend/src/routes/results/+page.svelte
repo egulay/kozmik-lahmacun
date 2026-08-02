@@ -1,13 +1,15 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { ChartNoAxesCombined, FlaskConical } from '@lucide/svelte';
+  import { ChartNoAxesCombined, FlaskConical, LibraryBig, Search } from '@lucide/svelte';
   import { api } from '$lib/api';
   import PageHeader from '$lib/components/PageHeader.svelte';
   import * as Card from '$lib/components/ui/card/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
   import * as Table from '$lib/components/ui/table/index.js';
   import * as Tooltip from '$lib/components/ui/tooltip/index.js';
-  import { locale, t } from '$lib/i18n';
+  import * as Select from '$lib/components/ui/select/index.js';
+  import { Input } from '$lib/components/ui/input/index.js';
+  import { locale, statusLabel, t } from '$lib/i18n';
   import type { Execution } from '$lib/types';
   import { formatDate } from '$lib/utils';
   import StateView from '$lib/components/StateView.svelte';
@@ -24,6 +26,9 @@
   let pageSize = $state(20);
   let totalElements = $state(0);
   let totalPages = $state(0);
+  let search = $state('');
+  let status = $state('ALL');
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
   onMount(() => {
     openWorkspaceTab({
@@ -48,7 +53,10 @@
     if (showLoading) loading = true;
     try {
       const response = await api.executionPage({
-        page: targetPage, size: pageSize, statuses: ['SUCCEEDED', 'FAILED']
+        page: targetPage,
+        size: pageSize,
+        statuses: status === 'ALL' ? ['SUCCEEDED', 'FAILED'] : [status],
+        search
       });
       results = response.items;
       pageNumber = response.page;
@@ -67,9 +75,23 @@
     void load(true, 0);
   }
 
+  function scheduleSearch() {
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => void load(true, 0), 300);
+  }
+
+  function changeStatus(value: string | undefined) {
+    if (!value) return;
+    status = value;
+    void load(true, 0);
+  }
+
   function title(execution: Execution) {
+    const entityName = $locale === 'tr'
+      ? execution.entityNameTr || execution.entityName || execution.entityId
+      : execution.entityName || execution.entityId;
     return execution.originalRequest
-      ?? `${execution.executionType} · ${execution.entityName ?? execution.entityId}`;
+      ?? `${execution.executionType} · ${entityName}`;
   }
 
   async function afterDelete() {
@@ -77,13 +99,37 @@
   }
 </script>
 
-<PageHeader title={$t('results')} description={$t('executionListBody')} />
+<PageHeader title={$t('results')} description={$t('resultListBody')}>
+  {#snippet icon()}
+    <LibraryBig class="size-5 text-muted-foreground" aria-hidden="true" />
+  {/snippet}
+</PageHeader>
 <Card.Root>
   <Card.Header>
-    <Card.Title>{$t('results')}</Card.Title>
-    <Card.Description>{$t('resultReady')}</Card.Description>
+    <Card.Title>{$t('resultHistoryTitle')}</Card.Title>
+    <Card.Description>{$t('resultHistoryBody')}</Card.Description>
   </Card.Header>
   <Card.Content>
+    <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:justify-between">
+      <label class="relative w-full sm:max-w-sm">
+        <span class="sr-only">{$t('search')}</span>
+        <Search class="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={17} aria-hidden="true" />
+        <Input bind:value={search} oninput={scheduleSearch} placeholder={$t('search')} class="pl-9" />
+      </label>
+      <label>
+        <span class="sr-only">{$t('status')}</span>
+        <Select.Root type="single" value={status} onValueChange={changeStatus}>
+          <Select.Trigger class="w-[180px]">
+            {status === 'ALL' ? $t('allStatuses') : statusLabel(status, $locale)}
+          </Select.Trigger>
+          <Select.Content>
+            <Select.Item value="ALL">{$t('allStatuses')}</Select.Item>
+            <Select.Item value="SUCCEEDED">{statusLabel('SUCCEEDED', $locale)}</Select.Item>
+            <Select.Item value="FAILED">{statusLabel('FAILED', $locale)}</Select.Item>
+          </Select.Content>
+        </Select.Root>
+      </label>
+    </div>
     <StateView loading={loading && results.length === 0} {error} empty={!loading && !error && results.length === 0} emptyText={$t('noExecutions')} onretry={load} />
     {#if results.length}
       <div
@@ -125,7 +171,7 @@
                             {...props}
                             href={`/results/${result.id}`}
                             variant="link"
-                            class="block h-auto max-w-full truncate p-0 text-left"
+                            class="block h-auto max-w-full whitespace-normal break-words p-0 text-left"
                           >{description}</Button>
                         {/snippet}
                       </Tooltip.Trigger>

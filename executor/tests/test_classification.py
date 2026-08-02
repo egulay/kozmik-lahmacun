@@ -1,3 +1,5 @@
+import asyncio
+import json
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -6,8 +8,12 @@ from kozmik_executor.chat.api import (
     _business_limitations_answer,
     _creator_answer,
     _clear_governed_intent,
+    _detected_language_code,
+    _enforce_supported_language_detection,
     _deterministic_entity_resolution,
     _governed_intent_override,
+    _repeats_user_request,
+    _unsupported_language_response,
 )
 from kozmik_executor.chat.models import ClassificationRequest, IntentType
 from kozmik_executor.main import app
@@ -46,6 +52,112 @@ def test_classifies_conversational_report_and_ml(monkeypatch) -> None:
     assert classify(monkeypatch, "Hello there").json()["intent"] == "CONVERSATIONAL"
     assert classify(monkeypatch, "Create a report with sum by region").json()["intent"] == "REPORT"
     assert classify(monkeypatch, "Forecast next month sales").json()["intent"] == "ML"
+
+
+def test_foreign_language_execution_request_is_rejected_before_planning(monkeypatch) -> None:
+    response = classify(monkeypatch, "Hola, crea un informe de ventas por región")
+
+    assert response.status_code == 200
+    assert response.json()["intent"] == "UNSUPPORTED_LANGUAGE"
+    assert response.json()["selectedEntityId"] is None
+    assert "solo están disponibles en inglés o turco" in (
+        response.json()["unsupportedLanguageResponse"]
+    )
+
+
+def test_arabic_request_gets_controlled_arabic_language_guidance(monkeypatch) -> None:
+    response = classify(monkeypatch, "هكذا هي الأمور، أها أها، لقد أعجبني ذلك")
+
+    assert response.status_code == 200
+    assert response.json()["intent"] == "UNSUPPORTED_LANGUAGE"
+    assert response.json()["unsupportedLanguageResponse"] == (
+        "الطلبات المتعلقة بالتواصل والتحليل مدعومة فقط باللغة الإنجليزية أو التركية. "
+        "يرجى إعادة صياغة الطلب باللغة الإنجليزية أو التركية."
+    )
+
+
+def test_generic_foreign_translation_never_receives_original_message() -> None:
+    original = "Nii see on, aha aha, mulle meeldis see"
+
+    class Provider:
+        def __init__(self):
+            self.prompts = []
+
+        async def complete_json(self, _system_prompt, user_prompt):
+            self.prompts.append(user_prompt)
+            if len(self.prompts) == 1:
+                return {"languageCode": "et"}
+            return {
+                "message": (
+                    "Suhtluse ja analüüsiga seotud päringuid toetatakse ainult inglise või "
+                    "türgi keeles. Palun sõnastage päring inglise või türgi keeles."
+                )
+            }
+
+    provider = Provider()
+    response = asyncio.run(_unsupported_language_response(provider, original))
+
+    assert json.loads(provider.prompts[0])["userMessage"] == original
+    assert "userMessage" not in json.loads(provider.prompts[1])
+    assert original not in provider.prompts[1]
+    assert not _repeats_user_request(original, response)
+    assert response.startswith("Suhtluse ja analüüsiga seotud päringuid")
+
+
+def test_repeated_user_phrase_is_detected() -> None:
+    assert _repeats_user_request(
+        "Nii see on, aha aha, mulle meeldis see",
+        "See on, aha aha, mulle meeldis see. Suhtlemine on piiratud.",
+    )
+
+
+def test_deterministic_detector_separates_supported_and_foreign_latin_languages() -> None:
+    assert _detected_language_code("É assim que eu gosto.") == "pt"
+    assert _detected_language_code("Nii see on, aha aha, mulle meeldis see") == "et"
+    assert _detected_language_code("What are you?") == "en"
+    assert _detected_language_code("Satış raporu oluştur") == "tr"
+    assert _detected_language_code("Tamam anladım kusura bakma. Naber?") == "tr"
+    assert _detected_language_code("tamam anladım. bak Türkçe yazıyorum nasılsın?") == "tr"
+    # Very short ambiguous messages must not be falsely blocked.
+    assert _detected_language_code("Hi") is None
+    assert _detected_language_code("test") is None
+
+
+def test_portuguese_never_reaches_normal_conversation(monkeypatch) -> None:
+    response = classify(monkeypatch, "É assim que eu gosto.")
+
+    assert response.status_code == 200
+    assert response.json()["intent"] == "UNSUPPORTED_LANGUAGE"
+    assert response.json()["selectedEntityId"] is None
+    assert response.json()["unsupportedLanguageResponse"] == (
+        "Solicitações relacionadas à comunicação e análise são suportadas apenas em inglês "
+        "ou turco. Reformule sua solicitação em inglês ou turco."
+    )
+    assert "AI assistant" not in response.json()["unsupportedLanguageResponse"]
+
+
+def test_supported_language_detection_overrides_provider_language_error() -> None:
+    assert _enforce_supported_language_detection(
+        "tr", IntentType.UNSUPPORTED_LANGUAGE
+    ) == IntentType.CONVERSATIONAL
+    assert _enforce_supported_language_detection(
+        "en", IntentType.UNSUPPORTED_LANGUAGE
+    ) == IntentType.CONVERSATIONAL
+    assert _enforce_supported_language_detection(
+        "pt", IntentType.UNSUPPORTED_LANGUAGE
+    ) == IntentType.UNSUPPORTED_LANGUAGE
+
+
+def test_turkish_capability_variants_are_always_conversational(monkeypatch) -> None:
+    for request in (
+        "Seni anneme tanıtıyorum. ne iş yaptığını söyler misin?",
+        "Yaptığın iş nedir?",
+    ):
+        response = classify(monkeypatch, request)
+
+        assert response.status_code == 200
+        assert response.json()["intent"] == "CONVERSATIONAL"
+        assert response.json()["selectedEntityId"] is None
 
 
 def test_business_limitations_answer_is_localized_and_nontechnical() -> None:
@@ -116,6 +228,28 @@ def test_turkish_controlled_what_if_request_is_ml() -> None:
     request = ClassificationRequest.model_validate(payload)
 
     assert _governed_intent_override(request, IntentType.REPORT) == IntentType.ML
+
+
+def test_plain_business_turkish_policy_scenario_request_is_ml() -> None:
+    payload = body(
+        "İndirim politikasını değiştirmeli miyiz? Uygun senaryoları karşılaştır ve öneri sun."
+    )
+    payload["language"] = "tr"
+    request = ClassificationRequest.model_validate(payload)
+
+    assert _governed_intent_override(
+        request, IntentType.CONVERSATIONAL
+    ) == IntentType.ML
+
+
+def test_plain_business_english_policy_scenario_request_is_ml() -> None:
+    request = ClassificationRequest.model_validate(body(
+        "Should we change the pricing policy? Compare suitable scenarios and recommend an option."
+    ))
+
+    assert _governed_intent_override(
+        request, IntentType.CONVERSATIONAL
+    ) == IntentType.ML
 
 
 def test_english_controlled_what_if_request_is_ml() -> None:
@@ -189,6 +323,38 @@ def test_explicit_entity_name_wins_over_incidental_description_word() -> None:
     assert str(_deterministic_entity_resolution(
         ClassificationRequest.model_validate(payload)
     )) == sales_id
+
+
+def test_localized_column_labels_resolve_entity_after_unrelated_chat() -> None:
+    payload = body(
+        "İndirim politikasını değiştirmeli miyiz? Uygun senaryoları karşılaştır ve öneri sun."
+    )
+    sales_id = str(uuid4())
+    payload["language"] = "tr"
+    payload["history"] = [
+        {"role": "user", "content": "Beethoven kimdir?"},
+        {"role": "assistant", "content": "Ludwig van Beethoven bir bestecidir."},
+    ]
+    payload["entities"] = [
+        {
+            "entityId": sales_id,
+            "name": "Satış Kaydı",
+            "description": "Satış işlemleri",
+            "columnNames": ["region", "discount_rate", "net_amount"],
+            "columnLabels": ["Bölge", "İndirim oranı", "Net satış tutarı"],
+        },
+        {
+            "entityId": str(uuid4()),
+            "name": "Çağrı Detayı Kaydı",
+            "description": "Telekom çağrı kayıtları",
+            "columnNames": ["call_type", "duration_seconds"],
+            "columnLabels": ["Çağrı türü", "Görüşme süresi"],
+        },
+    ]
+
+    request = ClassificationRequest.model_validate(payload)
+
+    assert str(_deterministic_entity_resolution(request)) == sales_id
 
 
 def test_ambiguous_entity_terms_still_defer_to_provider() -> None:

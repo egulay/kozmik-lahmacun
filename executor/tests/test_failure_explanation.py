@@ -86,6 +86,25 @@ def test_failure_prompt_contains_only_sanitized_bounded_facts():
     assert "SELECT *" not in prompt
 
 
+def test_temporal_group_output_is_not_misclassified_as_ungrouped_row_field():
+    raw = command().model_dump(by_alias=True, mode="json")
+    raw["order"]["payload"].update({
+        "select": [{"column": "sale_date", "alias": "sale_month"}],
+        "groupBy": [],
+        "temporalGroupBy": [{
+            "column": "sale_date", "alias": "sale_month", "granularity": "MONTH",
+        }],
+        "orderBy": [{"column": "sale_month", "direction": "ASC"}],
+    })
+    value = ExecutionCommand.model_validate(raw)
+
+    code, _, _ = FailureExplainer().sanitize(
+        value, RuntimeError("protected raw exception"), "SPARK_JOB_FAILED",
+    )
+
+    assert code == "SPARK_JOB_FAILED"
+
+
 def test_provider_failure_returns_persistable_turkish_fallback():
     outcome = asyncio.run(FailureExplainer(Registry(
         RecordingProvider(fail=True))).explain(

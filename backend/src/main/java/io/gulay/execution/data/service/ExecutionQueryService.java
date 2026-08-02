@@ -10,6 +10,7 @@ import io.gulay.execution.dto.ExecutionDtos;
 import io.gulay.execution.failure.data.repository.ExecutionFailureRepository;
 
 import java.util.UUID;
+import java.util.Collections;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -18,8 +19,12 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import io.gulay.execution.data.model.ExecutionStatus;
+import io.gulay.execution.data.model.ExecutionStatusHistoryModel;
+import io.gulay.execution.data.model.ExecutionRequestModel;
 import io.gulay.security.PlatformRole;
 
 @Service
@@ -85,19 +90,34 @@ public class ExecutionQueryService {
                 ? executions.findAdminPage(requestedStatuses, normalizedSearch, pageable)
                 : executions.findVisiblePage(
                 keycloakUserId, requestedStatuses, normalizedSearch, pageable);
+        val executionIds = resultPage.stream().map(ExecutionRequestModel::getId).toList();
+        val latestHistoryByExecution = executionIds.isEmpty()
+                ? Collections.<UUID, ExecutionStatusHistoryModel>emptyMap()
+                : history.findByExecutionIdInOrderByOccurredAtAsc(executionIds)
+                        .stream()
+                        .collect(Collectors.toMap(
+                                item -> item.getExecution().getId(),
+                                Function.identity(),
+                                (previous, latest) -> latest));
         val items = resultPage
                 .stream()
-                .map(execution -> new ExecutionDtos.ExecutionSummaryResponse(
-                        execution.getId(),
-                        execution.getExecutionType(),
-                        execution.getStatus().name(),
-                        execution.getEntity().getId(),
-                        execution.getEntity().getName(),
-                        execution.getOwner().getDisplayName(),
-                        execution.getOriginalRequest(),
-                        execution.getRequestedAt(),
-                        execution.getStartedAt(),
-                        execution.getCompletedAt()))
+                .map(execution -> {
+                    val latestHistory = latestHistoryByExecution.get(execution.getId());
+                    return new ExecutionDtos.ExecutionSummaryResponse(
+                            execution.getId(),
+                            execution.getExecutionType(),
+                            execution.getStatus().name(),
+                            execution.getEntity().getId(),
+                            execution.getEntity().getName(),
+                            execution.getEntity().getNameTr(),
+                            execution.getOwner().getDisplayName(),
+                            execution.getOriginalRequest(),
+                            execution.getRequestedAt(),
+                            execution.getStartedAt(),
+                            execution.getCompletedAt(),
+                            latestHistory == null ? execution.getStatus().name() : latestHistory.getStage(),
+                            latestHistory == null ? 0 : latestHistory.getProgress());
+                })
                 .toList();
         return new ExecutionDtos.ExecutionListResponse(
                 "1.0", items, resultPage.getNumber(), resultPage.getSize(),

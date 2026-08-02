@@ -2,6 +2,8 @@
 .env
 .idea/
 *.iml
+.ruff_cache/
+tmp/
 
 # Local secret-export helpers must never be committed
 scripts/add-openai-api-key.sh

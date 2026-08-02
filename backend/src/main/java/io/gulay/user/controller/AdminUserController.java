@@ -2,7 +2,11 @@ package io.gulay.user.controller;
 
 import io.gulay.user.data.service.UserManagementService;
 import io.gulay.user.dto.UserManagementDtos;
+import io.gulay.user.data.model.UserStatus;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -25,9 +29,11 @@ public class AdminUserController {
 
     @GetMapping
     UserManagementDtos.UserPage list(
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
-        return service.list(page, size);
+            @RequestParam(defaultValue = "0") @Min(0) int page,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size,
+            @RequestParam(required = false) Set<UserStatus> status,
+            @RequestParam(defaultValue = "") String search) {
+        return service.list(page, size, status, search);
     }
 
     @PostMapping

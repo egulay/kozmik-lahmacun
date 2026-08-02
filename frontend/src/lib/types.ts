@@ -77,11 +77,14 @@ export interface Execution {
   status: string;
   entityId: string;
   entityName?: string;
+  entityNameTr?: string | null;
   requester?: string;
   originalRequest?: string;
   requestedAt: string;
   startedAt?: string | null;
   completedAt?: string | null;
+  latestStage?: string | null;
+  latestProgressPercent?: number | null;
   order?: Record<string, unknown>;
   history: StatusHistory[];
   failure?: ExecutionFailure | null;
@@ -115,6 +118,12 @@ export interface ExecutionResult {
   guidanceKey: string;
   summaryStatus: string;
   managementSummary?: string | null;
+  summaryValidationStatus:
+    | 'ACCEPTED'
+    | 'ACCEPTED_WITH_ADVISORIES'
+    | 'REJECTED'
+    | 'PROVIDER_FAILED'
+    | 'LEGACY_UNVALIDATED';
   metrics?: unknown;
   previewPage: number;
   previewSize: number;

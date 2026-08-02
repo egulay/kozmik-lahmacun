@@ -2,7 +2,7 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
-  import { ArrowLeft, Ban, ChartNoAxesCombined, TriangleAlert } from '@lucide/svelte';
+  import { ArrowLeft, Ban, ChartNoAxesCombined, LoaderCircle, TriangleAlert } from '@lucide/svelte';
   import { api } from '$lib/api';
   import { locale, t } from '$lib/i18n';
   import type { EntitySummary, Execution } from '$lib/types';
@@ -22,6 +22,9 @@
   import { closeExecutionWorkspace, openWorkspaceTab } from '$lib/workspace-tabs';
   import DeleteExecutionButton from '$lib/components/DeleteExecutionButton.svelte';
   import PdfExportButton from '$lib/components/PdfExportButton.svelte';
+  import ProgressStageIcon from '$lib/components/ProgressStageIcon.svelte';
+  import MarkdownMessage from '$lib/components/MarkdownMessage.svelte';
+  import ExecutionTypeIcon from '$lib/components/ExecutionTypeIcon.svelte';
 
   let execution = $state<Execution | null>(null);
   let localizedEntity = $state<EntitySummary | null>(null);
@@ -145,12 +148,15 @@
   }
 
   async function cancel() {
-    if (!execution) return;
+    const executionId = execution?.id;
+    cancelDialogOpen = false;
+    if (!executionId) return;
     cancelling = true;
     try {
-      await api.cancelExecution(execution.id);
-      cancelDialogOpen = false;
-      await load(execution.id);
+      await api.cancelExecution(executionId);
+      if ($page.params.id === executionId) {
+        await load(executionId);
+      }
     } catch {
       error = $t('featureUnavailable');
     } finally {
@@ -159,19 +165,28 @@
   }
 
   function stageLabel(stage: string) {
-    if (stage === 'RESOLVING_DATA') return $t('resolvingData');
-    if (stage === 'TUNING') return $t('tuningModels');
-    return stage.replaceAll('_', ' ');
+    let label = stage.replaceAll('_', ' ');
+    if (stage === 'PLANNING') label = $t('timelineStagePlanning');
+    if (stage === 'VALIDATING') label = $t('timelineStageValidating');
+    if (stage === 'QUEUED') label = $t('timelineStageQueued');
+    if (stage === 'PREPARING') label = $t('timelineStagePreparing');
+    if (stage === 'RESOLVING_DATA') label = $t('resolvingData');
+    if (stage === 'TUNING') label = $t('tuningModels');
+    if (stage === 'TRAINING') label = $t('timelineStageTraining');
+    if (stage === 'RUNNING') label = $t('timelineStageRunning');
+    if (stage === 'WRITING_RESULTS') label = $t('timelineStageWritingResults');
+    if (stage === 'SUMMARIZING') label = $t('timelineStageSummarizing');
+    if (stage === 'COMPLETED') label = $t('timelineStageCompleted');
+    if (stage === 'FAILED') label = $t('timelineStageFailed');
+    if (stage === 'CANCELLED') label = $t('timelineStageCancelled');
+    if (stage === 'TIMED_OUT') label = $t('timelineStageTimedOut');
+    if (stage === 'CANCELLATION_REQUESTED') {
+      label = $t('timelineStageCancellationRequested');
+    }
+    return label.toLocaleUpperCase($locale === 'tr' ? 'tr-TR' : 'en-US');
   }
 
   function messageLabel(code: string) {
-    if (code === 'EXECUTION_RESOLVING_DATA') return $t('resolvingData');
-    if (code === 'EXECUTION_ML_TUNING') return $t('tuningModels');
-    if (code === 'GOVERNED_DATASET_NOT_FOUND') return $t('governedDatasetNotFound');
-    if (code === 'GOVERNED_DATASET_BINDING_MISMATCH') {
-      return $t('governedDatasetBindingMismatch');
-    }
-    if (code === 'SPARK_JOB_FAILED') return $t('sparkJobFailed');
     return code;
   }
 
@@ -216,6 +231,14 @@
     );
   });
 
+  const timelineHistory = $derived.by(() =>
+    execution
+      ? [...execution.history].sort(
+          (left, right) => Date.parse(right.occurredAt) - Date.parse(left.occurredAt)
+        )
+      : []
+  );
+
   async function afterDelete() {
     if (!execution) return;
     closeExecutionWorkspace(execution.id);
@@ -231,8 +254,23 @@
     : $t('details')}
   description={execution?.id}
 >
+  {#snippet icon()}
+    {#if execution && !isTerminal(execution.status)}
+      <LoaderCircle class="size-5 animate-spin text-muted-foreground" aria-hidden="true" />
+    {:else if execution}
+      <ExecutionTypeIcon
+        kind={execution.executionType}
+        status={execution.status}
+        context="execution"
+        class="size-5 text-muted-foreground"
+      />
+    {/if}
+  {/snippet}
   {#snippet actions()}
     <div class="flex flex-wrap justify-end gap-2">
+      {#if execution?.status === 'SUCCEEDED'}
+        <Button href={`/results/${execution.id}`} size="sm"><ChartNoAxesCombined size={16} />{$t('viewResult')}</Button>
+      {/if}
       {#if execution && isTerminal(execution.status)}
         <PdfExportButton documentId={execution.id} documentType="execution" />
       {/if}
@@ -250,7 +288,7 @@
       <TriangleAlert />
       <Alert.Title>{$t('failureReason')}</Alert.Title>
       <Alert.Description class="space-y-3 leading-relaxed">
-        <p>{failureExplanation}</p>
+        <MarkdownMessage content={failureExplanation} />
         {#if execution.failure}
           <div class="rounded-md border border-destructive/30 bg-background/60 p-3 text-foreground">
             <strong class="text-sm">{$t('sanitizedReason')}</strong>
@@ -326,9 +364,9 @@
         <Progress value={currentProgress} aria-label={`${$t('progress')} ${currentProgress}%`} />
       </div>
       <ol class="grid gap-0">
-      {#each execution.history as item}
+      {#each timelineHistory as item}
         <li class="grid grid-cols-[auto_1fr_auto] gap-3 py-3">
-          <span class={`mt-1.5 size-2.5 rounded-full ${item.progressPercent === 100 ? 'bg-primary' : 'bg-muted-foreground'}`}></span>
+          <ProgressStageIcon stage={item.stage} />
           <div><strong class="text-sm">{stageLabel(item.stage)}</strong><small class="block text-xs text-muted-foreground">{formatDate(item.occurredAt, $locale === 'tr' ? 'tr-TR' : 'en-US')}</small><p class="mt-1 text-sm text-muted-foreground">{messageLabel(item.messageCode)}</p></div>
           <Badge variant="secondary">{item.progressPercent}%</Badge>
         </li>

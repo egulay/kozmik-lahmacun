@@ -2,11 +2,11 @@
   import { page } from '$app/stores';
   import {
     Activity,
-    ChartNoAxesCombined,
     ChevronsUpDown,
     Database,
     Languages,
     KeyRound,
+    LibraryBig,
     LogOut,
     MessageSquareText,
     Moon,
@@ -72,7 +72,7 @@
   const main = [
     { href: '/chat', label: 'chat' as const, icon: MessageSquareText },
     { href: '/executions', label: 'executions' as const, icon: Activity },
-    { href: '/results', label: 'results' as const, icon: ChartNoAxesCombined },
+    { href: '/results', label: 'results' as const, icon: LibraryBig },
     { href: '/entities', label: 'entities' as const, icon: Database }
   ];
   const admin = [
@@ -362,8 +362,19 @@
     <Sidebar.Header>
       <Sidebar.Menu>
         <Sidebar.MenuItem>
-          <Sidebar.MenuButton size="lg" class="h-auto px-2 py-2">
-            <span class="grid flex-1 text-left text-sm leading-tight">
+          <Sidebar.MenuButton
+            size="lg"
+            class="h-auto px-2 py-2"
+            aria-label={$t('brand')}
+            tooltipContent={$t('brand')}
+          >
+            <img
+              src="/favicon.svg"
+              alt=""
+              aria-hidden="true"
+              class="mx-auto hidden size-5 shrink-0 group-data-[collapsible=icon]:block"
+            />
+            <span class="grid flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
               <span class="truncate font-semibold">{$t('brand')}</span>
               <span class="truncate text-xs">Governed analytics</span>
             </span>
@@ -390,7 +401,8 @@
                     aria-label={$t('executions')}
                   >
                     {#each executionTree as execution (execution.id)}
-                      {@const executionTitle = execution.originalRequest ?? `${execution.executionType} · ${execution.entityName ?? execution.entityId}`}
+                      {@const executionEntityName = $locale === 'tr' ? execution.entityNameTr || execution.entityName || execution.entityId : execution.entityName || execution.entityId}
+                      {@const executionTitle = execution.originalRequest ?? `${execution.executionType} · ${executionEntityName}`}
                       {@const deletionPending = $deletingExecutionIds.has(execution.id)}
                       <Sidebar.MenuSubItem>
                         <Tooltip.Provider>
@@ -595,7 +607,7 @@
     </Sidebar.Footer>
     <Sidebar.Rail />
   </Sidebar.Root>
-  <Sidebar.Inset class="min-w-0 overflow-x-hidden">
+  <Sidebar.Inset class="h-svh min-h-0 min-w-0 overflow-hidden">
     <header class="flex h-14 shrink-0 items-center gap-2 border-b px-4">
       <Sidebar.Trigger aria-label={$t('menu')} />
       <Sidebar.Separator orientation="vertical" class="mr-2 h-4" />
@@ -633,11 +645,13 @@
               {#snippet child({ props })}
                 <Badge
                   {...props}
-                  variant={liveConnectionActive() ? 'outline' : 'destructive'}
-                  class={liveConnectionActive() ? 'gap-1.5 text-emerald-700 dark:text-emerald-400' : 'gap-1.5'}
+                  variant="outline"
+                  class={liveConnectionActive()
+                    ? 'gap-1.5 text-emerald-700 dark:text-emerald-400'
+                    : 'gap-1.5 text-destructive'}
                   aria-live="polite"
                 >
-                  <span class={`size-1.5 rounded-full ${liveConnectionActive() ? 'bg-emerald-500' : 'bg-destructive-foreground'}`}></span>
+                  <span class={`size-1.5 rounded-full ${liveConnectionActive() ? 'bg-emerald-500' : 'bg-destructive'}`}></span>
                   {liveConnectionActive() ? $t('streamLive') : $t('streamOffline')}
                 </Badge>
               {/snippet}
@@ -666,7 +680,7 @@
     <div class="pdf-navigation-tabs w-full min-w-0">
       <WorkspaceTabs />
     </div>
-    <main id="main-content" tabindex="-1" class="mx-auto w-full min-w-0 max-w-screen-2xl p-4 md:p-6">{@render children()}</main>
+    <main id="main-content" tabindex="-1" class="w-full min-h-0 min-w-0 max-w-screen-2xl flex-1 overflow-y-auto overscroll-contain p-4 md:p-6">{@render children()}</main>
   </Sidebar.Inset>
 </Sidebar.Provider>
 

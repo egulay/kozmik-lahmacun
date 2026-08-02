@@ -21,7 +21,8 @@ public final class PythonChatContracts {
     }
 
     public record EntityMetadata(
-            UUID entityId, String name, String description, List<String> columnNames) {
+            UUID entityId, String name, String description, List<String> columnNames,
+            List<String> columnLabels) {
     }
 
     public record ClassificationRequest(String schemaVersion, UUID requestId,
@@ -32,6 +33,13 @@ public final class PythonChatContracts {
 
     public record ClassificationResponse(String schemaVersion, UUID requestId,
                                          String correlationId, String intent, UUID selectedEntityId,
-                                         String provider, String model) {
+                                         String provider, String model,
+                                         String unsupportedLanguageResponse) {
+        public ClassificationResponse(
+                String schemaVersion, UUID requestId, String correlationId,
+                String intent, UUID selectedEntityId, String provider, String model) {
+            this(schemaVersion, requestId, correlationId, intent, selectedEntityId,
+                    provider, model, null);
+        }
     }
 }

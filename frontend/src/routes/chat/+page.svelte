@@ -475,11 +475,13 @@
 
   async function scrollToLatest() {
     await tick();
-    messageEnd?.scrollIntoView({ block: 'end', behavior: 'auto' });
+    if (messageViewport) {
+      messageViewport.scrollTop = messageViewport.scrollHeight;
+    }
   }
 </script>
 
-<div class="grid h-[calc(100dvh-7rem)] min-h-[36rem] gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
+<div class="grid min-h-[36rem] gap-4 lg:h-full lg:min-h-0 lg:grid-cols-[18rem_minmax(0,1fr)]">
   <Card.Root class="flex h-full min-h-0 flex-col overflow-hidden">
     <Card.Header class="flex flex-row items-center justify-between gap-2 pb-3">
       <Card.Title class="text-base">{$t('recentThreads')}</Card.Title>

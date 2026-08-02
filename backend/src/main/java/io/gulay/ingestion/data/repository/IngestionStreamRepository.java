@@ -11,5 +11,6 @@ public interface IngestionStreamRepository extends JpaRepository<IngestionStream
     Optional<IngestionStreamModel> findFirstByEntityIdOrderByUpdatedAtDesc(UUID entityId);
 
     Optional<IngestionStreamModel>
-    findFirstByEntityIdAndStatusOrderByUpdatedAtDesc(UUID entityId, String status);
+    findFirstByEntityIdAndLastSequenceIsNotNullAndLastOffsetIsNotNullOrderByUpdatedAtDesc(
+            UUID entityId);
 }

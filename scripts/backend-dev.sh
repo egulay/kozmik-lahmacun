@@ -29,7 +29,7 @@ export DATABASE_SCHEMA="kozmik_lahmacun"
 export SPRING_FLYWAY_BASELINE_ON_MIGRATE="true"
 # ddl.sql replays all migrations before this process starts. Baseline at
 # the same version so Flyway owns only migrations added after the demo snapshot.
-export SPRING_FLYWAY_BASELINE_VERSION="22"
+export SPRING_FLYWAY_BASELINE_VERSION="27"
 if [[ "${JAVA_LOG_DIR:-logs/java}" != /* ]]; then
   export JAVA_LOG_DIR="${REPOSITORY_ROOT}/${JAVA_LOG_DIR:-logs/java}"
 fi

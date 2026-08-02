@@ -30,14 +30,16 @@ def _parse_intent(content: str) -> IntentType:
         pass
 
     structured_matches = set(re.findall(
-        r'["\']intent["\']\s*:\s*["\'](CONVERSATIONAL|REPORT|ML)["\']',
+        r'["\']intent["\']\s*:\s*["\'](CONVERSATIONAL|REPORT|ML|UNSUPPORTED_LANGUAGE)["\']',
         candidate,
         flags=re.IGNORECASE,
     ))
     if len(structured_matches) == 1:
         return IntentType(structured_matches.pop().upper())
 
-    matches = set(re.findall(r"\b(CONVERSATIONAL|REPORT|ML)\b", candidate.upper()))
+    matches = set(re.findall(
+        r"\b(CONVERSATIONAL|REPORT|ML|UNSUPPORTED_LANGUAGE)\b", candidate.upper()
+    ))
     if len(matches) == 1:
         return IntentType(matches.pop())
     raise ValueError("provider did not return exactly one supported intent")
@@ -157,7 +159,10 @@ class OpenAiCompatibleProvider:
                     "role": "system",
                     "content": (
                         "Return exactly one JSON object with intent equal to "
-                        "CONVERSATIONAL, REPORT, or ML. Do not generate SQL, code, or a plan."
+                        "CONVERSATIONAL, REPORT, ML, or UNSUPPORTED_LANGUAGE. First detect the "
+                        "language of the current user request. Use UNSUPPORTED_LANGUAGE whenever "
+                        "it is not English or Turkish, regardless of its business intent. Do not "
+                        "generate SQL, code, or a plan."
                     ),
                 },
                 {"role": "user", "content": prompt},
@@ -322,12 +327,31 @@ class DeterministicMockProvider:
         )
         if "[fail]" in prompt:
             raise ProviderError("MOCK_PROVIDER_FAILURE")
-        response = f"Mock response: {prompt}"
+        lowered = prompt.lower()
+        if any(word in lowered for word in ("hola", "español", "informe")):
+            response = (
+                "La comunicación y las solicitudes de análisis solo están disponibles en "
+                "inglés o turco. Repita su solicitud en inglés o turco."
+            )
+        elif any(word in lowered for word in ("bonjour", "français", "rapport")):
+            response = (
+                "La communication et les demandes d’analyse sont disponibles uniquement en "
+                "anglais ou en turc. Veuillez reformuler votre demande dans l’une de ces langues."
+            )
+        else:
+            response = f"Mock response: {prompt}"
         for offset in range(0, len(response), 8):
             yield response[offset : offset + 8]
 
     async def classify(self, prompt: str) -> IntentType:
         lowered = prompt.rsplit("Current request:\n", maxsplit=1)[-1].lower()
+        if re.search(r"[\u0600-\u06ff\u0400-\u04ff\u4e00-\u9fff]", lowered) or any(
+            word in lowered for word in (
+            "bonjour", "français", "rapport", "hola", "español", "informe",
+            "hallo", "deutsch", "bericht", "ciao", "italiano", "报告", "привет",
+            )
+        ):
+            return IntentType.UNSUPPORTED_LANGUAGE
         if any(word in lowered for word in (
             "predict", "forecast", "model", "classification", "tahmin", "sınıflandır",
         )):
@@ -339,6 +363,19 @@ class DeterministicMockProvider:
         return IntentType.CONVERSATIONAL
 
     async def complete_json(self, system_prompt: str, user_prompt: str) -> dict:
+        if "Translate only the supplied fixed policy" in system_prompt:
+            language_code = json.loads(user_prompt).get("languageCode")
+            translations = {
+                "pt": (
+                    "Solicitações relacionadas à comunicação e análise são suportadas apenas "
+                    "em inglês ou turco. Reformule sua solicitação em inglês ou turco."
+                ),
+                "et": (
+                    "Suhtluse ja analüüsiga seotud päringuid toetatakse ainult inglise või "
+                    "türgi keeles. Palun sõnastage päring inglise või türgi keeles."
+                ),
+            }
+            return {"message": translations.get(language_code, "Unsupported language")}
         if "ENTITY_RESOLUTION_REQUEST=" in user_prompt:
             request = json.loads(user_prompt.split("ENTITY_RESOLUTION_REQUEST=", 1)[1])
             text = " ".join([
@@ -357,6 +394,7 @@ class DeterministicMockProvider:
                         entity.get("name", ""),
                         entity.get("description", ""),
                         *entity.get("columnNames", []),
+                        *entity.get("columnLabels", []),
                     ]
                     for term in re.findall(r"[a-zA-ZÀ-ž_]{3,}", value.lower())
                 }

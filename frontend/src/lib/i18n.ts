@@ -62,6 +62,11 @@ const messages = {
     goExecution: 'Çalışmayı görüntüle',
     executionListTitle: 'Çalışmalar',
     executionListBody: 'Rapor ve makine öğrenmesi çalışmalarınızın kalıcı durumu.',
+    executionHistoryTitle: 'Çalışma geçmişi',
+    executionHistoryBody: 'Geçmiş ve devam eden çalışmalarınızı görüntüleyin, filtreleyin ve açın.',
+    resultListBody: 'Tamamlanan rapor ve makine öğrenmesi çalışmalarınızın sonuçları.',
+    resultHistoryTitle: 'Sonuç geçmişi',
+    resultHistoryBody: 'Hazır ve başarısız sonuçlarınızı görüntüleyin, filtreleyin ve açın.',
     search: 'Ara',
     allStatuses: 'Tüm durumlar',
     status: 'Durum',
@@ -83,8 +88,21 @@ const messages = {
     orderUnavailableBody: 'Planlama doğrulaması başarısız olduğu için çalıştırma emri JSON’u kaydedilmedi ve Spark başlatılmadı.',
     timeline: 'İlerleme zaman çizelgesi',
     progress: 'İlerleme',
+    timelineStagePlanning: 'Planlama',
+    timelineStageValidating: 'Doğrulama',
+    timelineStageQueued: 'Kuyrukta',
+    timelineStagePreparing: 'Hazırlanıyor',
     resolvingData: 'Yönetilen veri çözümleniyor',
     tuningModels: 'Aday modeller deneniyor',
+    timelineStageTraining: 'Model eğitiliyor',
+    timelineStageRunning: 'Çalıştırılıyor',
+    timelineStageWritingResults: 'Sonuçlar yazılıyor',
+    timelineStageSummarizing: 'Özet hazırlanıyor',
+    timelineStageCompleted: 'Tamamlandı',
+    timelineStageFailed: 'Başarısız',
+    timelineStageCancelled: 'İptal edildi',
+    timelineStageTimedOut: 'Zaman aşımına uğradı',
+    timelineStageCancellationRequested: 'İptal isteniyor',
     governedDatasetNotFound: 'Bu varlık ve şema sürümü için tamamlanmış yönetilen veri bulunamadı.',
     governedDatasetBindingMismatch: 'Çözümlenen veri çalışma varlığı veya şema sürümüyle eşleşmiyor.',
     failureReason: 'Çalışma neden başarısız oldu?',
@@ -93,13 +111,16 @@ const messages = {
     sparkJobFailed: 'Onaylı rapor planı Spark tarafından güvenli biçimde yürütülemedi.',
     mixedReportFailure: 'Rapor planı satır düzeyindeki satış alanlarını genel bir toplama işlemiyle birleştirdi. Toplama tamamlandığında satış tarihi artık sıralama için mevcut değildi ve çalışma güvenli biçimde durduruldu. Tekil kayıtları listelemek için toplama işlemi kullanmayın; toplamlar isteniyorsa alanları açıkça gruplandırın.',
     cancel: 'İptal et',
-    cancelConfirm: 'Bu çalışmayı iptal etmek istediğinizden emin misiniz? Yalnızca bu çalışmaya ait Spark işi durdurulacak ve durum İPTAL EDİLDİ olarak saklanacaktır. Kayıtlar ve dosyalar, daha sonra ayrıca Sil işlemini seçene kadar korunur.',
+    cancelConfirm: 'Bu çalışmayı iptal etmek istediğinizden emin misiniz? Yalnızca bu çalışmaya ait Spark işi durdurulacak ve durum İPTAL EDİLDİ olarak saklanacaktır. İptal tamamlandığında kayıtları ve dosyaları kalıcı olarak kaldırmak için çalışma sayfasının üstündeki veya Çalıştırmalar listesindeki Sil düğmesini kullanabilirsiniz.',
     resultReady: 'Sonuç hazır',
+    resultAvailable: 'Çalıştırma sonucu',
+    resultStillWorking: 'Sonuç hazırlanıyor.',
+    resultUnavailable: 'Bu çalışma için görüntülenebilir bir sonuç oluşturulmadı.',
     viewResult: 'Sonucu görüntüle',
     resultTitle: 'Çalıştırma sonucu',
     emptyExecutionResultTitle: 'Eşleşen veri bulunamadı',
     emptyExecutionResultBody: 'Bu çalıştırma herhangi bir veri döndürmedi. İsteği veya filtreleri gözden geçirip yeniden deneyebilirsiniz.',
-    summary: 'Yönetici özeti',
+    summary: 'Özet',
     summaryPending: 'Özet hazırlanıyor. Analitik sonuç kullanılabilir.',
     summaryFailed: 'Özet üretilemedi; analitik sonuç kullanılmaya devam edebilir.',
     kpis: 'Temel göstergeler',
@@ -208,8 +229,7 @@ const messages = {
     ,previewLimited: 'Sistem en fazla 100 önizleme satırı saklayabilir. Bu sonuçta {total} önizleme satırı bulunur ve sayfa başına en fazla {size} satır gösterilir.'
     ,recentThreads: 'Son sohbetler'
     ,recentWork: 'Raporlar ve modeller'
-    ,registeredEntities: 'Kullanılabilir veri varlıkları'
-    ,registeredSchemas: 'Analize hazır veri varlıkları'
+    ,registeredEntities: 'Rapor ve tahminlere hazır veri varlıkları'
     ,delete: 'Sil'
     ,deleting: 'Siliniyor…'
     ,deleteExecution: 'Çalışmayı sil'
@@ -276,6 +296,11 @@ const messages = {
     goExecution: 'View execution',
     executionListTitle: 'Executions',
     executionListBody: 'Durable state for your report and machine-learning work.',
+    executionHistoryTitle: 'Execution history',
+    executionHistoryBody: 'Browse, filter, and open your current and previous executions.',
+    resultListBody: 'Results produced by your completed report and machine-learning work.',
+    resultHistoryTitle: 'Result history',
+    resultHistoryBody: 'Browse, filter, and open your available and failed results.',
     search: 'Search',
     allStatuses: 'All statuses',
     status: 'Status',
@@ -297,8 +322,21 @@ const messages = {
     orderUnavailableBody: 'Planning validation failed, so no execution-order JSON was persisted and Spark was not started.',
     timeline: 'Progress timeline',
     progress: 'Progress',
+    timelineStagePlanning: 'Planning',
+    timelineStageValidating: 'Validating',
+    timelineStageQueued: 'Queued',
+    timelineStagePreparing: 'Preparing',
     resolvingData: 'Resolving governed data',
     tuningModels: 'Evaluating candidate models',
+    timelineStageTraining: 'Training',
+    timelineStageRunning: 'Running',
+    timelineStageWritingResults: 'Writing results',
+    timelineStageSummarizing: 'Summarizing',
+    timelineStageCompleted: 'Completed',
+    timelineStageFailed: 'Failed',
+    timelineStageCancelled: 'Cancelled',
+    timelineStageTimedOut: 'Timed out',
+    timelineStageCancellationRequested: 'Cancellation requested',
     governedDatasetNotFound: 'No completed governed dataset exists for this entity and schema version.',
     governedDatasetBindingMismatch: 'The resolved dataset does not match the execution entity or schema version.',
     failureReason: 'Why did this execution fail?',
@@ -307,13 +345,16 @@ const messages = {
     sparkJobFailed: 'Spark could not safely execute the approved report plan.',
     mixedReportFailure: 'The report plan combined row-level sales fields with an overall aggregation. After aggregation, the sale date was no longer available for sorting, so execution was stopped safely. To list individual records, do not use an aggregation; to request totals, explicitly group the fields.',
     cancel: 'Cancel',
-    cancelConfirm: 'Are you sure you want to cancel this execution? Only this execution’s Spark job will be stopped and its status will be retained as CANCELLED. Records and files remain available until you explicitly choose Delete later.',
+    cancelConfirm: 'Are you sure you want to cancel this execution? Only this execution’s Spark job will be stopped and its status will be retained as CANCELLED. After cancellation completes, use Delete at the top of the execution page or in the Executions list to permanently remove its records and files.',
     resultReady: 'Result ready',
+    resultAvailable: 'Execution result',
+    resultStillWorking: 'The result is still being prepared.',
+    resultUnavailable: 'No viewable result was produced for this execution.',
     viewResult: 'View result',
     resultTitle: 'Execution Result',
     emptyExecutionResultTitle: 'No matching data was found',
     emptyExecutionResultBody: 'This execution returned no data. Review the request or its filters and try again.',
-    summary: 'Management summary',
+    summary: 'Summary',
     summaryPending: 'The summary is being prepared. The analytical result is available.',
     summaryFailed: 'Summary generation failed; the analytical result remains usable.',
     kpis: 'Key indicators',
@@ -422,7 +463,7 @@ const messages = {
     ,previewLimited: 'The system can retain up to 100 preview rows. This result contains {total} preview rows, displayed in pages of up to {size}.'
     ,recentThreads: 'Recent conversations'
     ,recentWork: 'Reports and models'
-    ,registeredEntities: 'Available data entities'
+    ,registeredEntities: 'Data entities ready for reports and predictions'
     ,delete: 'Delete'
     ,deleting: 'Deleting…'
     ,deleteExecution: 'Delete execution'
@@ -430,7 +471,6 @@ const messages = {
     ,deleteExecutionBody: 'You are about to permanently delete this execution and its associated result. Its execution history, result metadata, and Parquet/model objects in MinIO will be removed. This action cannot be undone.'
     ,deleteExecutionFailed: 'The execution could not be deleted safely. Its durable records were retained; please try again.'
     ,keepExecution: 'Cancel'
-    ,registeredSchemas: 'Data entities ready for analysis'
   }
 } as const;
 

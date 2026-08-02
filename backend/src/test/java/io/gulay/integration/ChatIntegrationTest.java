@@ -35,6 +35,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.oidcLogin;
@@ -54,6 +56,8 @@ class ChatIntegrationTest {
             new PostgreSQLContainer(DockerImageName.parse("postgres:16.4-alpine3.20"))
                     .withDatabaseName("kozmik").withUsername("kozmik")
                     .withPassword("integration-password");
+    // TestcontainersExtension owns and closes this class-scoped container.
+    @SuppressWarnings("resource")
     @Container static final GenericContainer<?> REDIS =
             new GenericContainer<>(DockerImageName.parse("redis:7.2.5-alpine3.20"))
                     .withExposedPorts(6379);
@@ -166,7 +170,6 @@ class ChatIntegrationTest {
     void persistsCompletionAndProvidesReconnectSafeSseTerminalEvent() throws Exception {
         doAnswer(invocation -> {
             val request = (PythonChatContracts.StreamRequest) invocation.getArgument(0);
-            @SuppressWarnings("unchecked")
             java.util.function.Consumer<PythonChatContracts.StreamEvent> consumer =
                     invocation.getArgument(1);
             consumer.accept(event(request, "message-started", null, null));
@@ -197,10 +200,34 @@ class ChatIntegrationTest {
     }
 
     @Test
+    void persistsControlledForeignLanguageGuidanceWithoutStartingChatOrPlanning()
+            throws Exception {
+        val arabic = "الطلبات المتعلقة بالتواصل والتحليل مدعومة فقط باللغة الإنجليزية "
+                + "أو التركية. يرجى إعادة صياغة الطلب باللغة الإنجليزية أو التركية.";
+        doAnswer(invocation -> {
+            val request = (PythonChatContracts.ClassificationRequest) invocation.getArgument(0);
+            return new PythonChatContracts.ClassificationResponse(
+                    "1.0", request.requestId(), request.correlationId(),
+                    "UNSUPPORTED_LANGUAGE", null, "mock", "mock-v1", arabic);
+        }).when(pythonClient).classify(any());
+
+        val threadId = createThread(owner);
+        val posted = postMessage(threadId, owner, "هكذا هي الأمور");
+        val assistantId = UUID.fromString(
+                posted.get("assistantMessage").get("id").stringValue());
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+            val assistant = messages.findById(assistantId).orElseThrow();
+            assertThat(assistant.getStatus()).isEqualTo(ChatMessageStatus.COMPLETED);
+            assertThat(assistant.getContent()).isEqualTo(arabic);
+        });
+        verify(pythonClient, never()).stream(any(), any());
+    }
+
+    @Test
     void persistsSanitizedFailureAndStreamsFailureOnReconnect() throws Exception {
         doAnswer(invocation -> {
             val request = (PythonChatContracts.StreamRequest) invocation.getArgument(0);
-            @SuppressWarnings("unchecked")
             java.util.function.Consumer<PythonChatContracts.StreamEvent> consumer =
                     invocation.getArgument(1);
             consumer.accept(event(request, "message-started", null, null));

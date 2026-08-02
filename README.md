@@ -24,8 +24,8 @@ then does trusted Spark code process data inside the controlled environment.
 Arbitrary SQL, generated Python, generated shell commands, and arbitrary
 executable code are not accepted.
 
-After Spark finishes, the LLM receives a separate bounded facts object—not the
-underlying dataset—to produce a plain-language management summary. This
+After Spark finishes, the LLM receives a separate privacy-safe calculated-result
+object—not the underlying dataset—to produce a plain-language management summary. This
 applies to both reports and ML results. A non-technical manager can therefore
 ask for a grouped sales comparison, a prediction, or a controlled scenario
 analysis and receive the calculation, visualizations, relevant limitations,
@@ -530,12 +530,13 @@ Management explanation is a separate, non-critical stage after trusted
 execution:
 
 1. Spark finishes and durable artifacts are written.
-2. Python constructs a bounded allowlisted facts object.
+2. Python constructs an allowlisted, privacy-safe calculated-result object.
 3. Direct identifiers, source datasets, record-level contents, prediction
    previews and object paths are excluded.
 4. Approved report breakdowns, scalar KPIs, metrics, warnings, strongest
    drivers and controlled scenario facts may be included.
-5. The configured LLM writes a short Turkish or English management summary.
+5. The configured LLM writes a Turkish or English management summary that answers
+   the original business request; no application-level summary-length limit is imposed.
 6. Java persists the summary status and text with the result.
 
 Report summaries describe approved comparisons, rankings, ranges, or time

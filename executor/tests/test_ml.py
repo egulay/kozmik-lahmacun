@@ -414,10 +414,17 @@ def test_linear_regression_end_to_end_is_deterministic(tmp_path, spark):
         asyncio.Event()))
     assert result["rowCount"] > 0
     assert {item["code"] for item in result["kpis"]} == {"RMSE", "R2"}
-    assert result["charts"][0]["chartId"] == "feature-importance"
+    assert not any(chart["chartId"] == "feature-importance" for chart in result["charts"])
     assert {bucket for bucket, _ in store.uploads} == {"results", "models"}
     assert result["artifact"]["format"] == "PARQUET"
     assert result["modelArtifact"]["format"] == "SPARK_ML_ZIP"
+
+
+def test_unscaled_linear_coefficients_are_not_published_as_comparable_importance():
+    class LinearModel:
+        coefficients = [1.0, 100.0]
+
+    assert SparkMlExecutor._importance(["factor_a", "factor_b"], LinearModel()) == []
 
 
 def test_regression_executes_bounded_what_if_scenarios(tmp_path, spark):
@@ -472,6 +479,10 @@ def test_regression_pipeline_encodes_governed_categorical_features(tmp_path, spa
         )
     )
     value = order(planning).model_copy(deep=True)
+    value.payload.algorithm = "DECISION_TREE_REGRESSOR"
+    value.payload.parameters = {
+        "maxDepth": 4, "minInstancesPerNode": 1, "minInfoGain": 0.0,
+    }
     value.payload.feature_columns.append("region")
     value.payload.categorical_feature_columns = ["region"]
     store = MemoryMinio()

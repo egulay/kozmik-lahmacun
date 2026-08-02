@@ -55,9 +55,12 @@ public class GovernedDatasetResolutionService {
             bindings.save(binding);
             return fileResponse(execution, binding, entityId);
         }
+        // Streams are intentionally open-ended. While a new chunk is INGESTING,
+        // earlier checkpointed parts remain immutable and safe for analytics.
+        // Persisting the sequence/offset here gives this execution a stable snapshot.
         val stream = streams
-                .findFirstByEntityIdAndStatusOrderByUpdatedAtDesc(entityId, "COMPLETED")
-                .filter(item -> item.getLastSequence() != null && item.getLastOffset() != null)
+                .findFirstByEntityIdAndLastSequenceIsNotNullAndLastOffsetIsNotNullOrderByUpdatedAtDesc(
+                        entityId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "No governed dataset is available for the execution schema"));
         val binding = ExecutionStreamBindingModel.builder()

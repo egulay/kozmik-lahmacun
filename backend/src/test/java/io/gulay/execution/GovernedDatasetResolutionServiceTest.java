@@ -15,6 +15,7 @@ import io.gulay.execution.data.repository.ExecutionDatasetBindingRepository;
 import io.gulay.execution.data.repository.ExecutionStreamBindingRepository;
 import io.gulay.execution.data.service.GovernedDatasetResolutionService;
 import io.gulay.ingestion.data.model.ImportJobModel;
+import io.gulay.ingestion.data.model.IngestionStreamModel;
 import io.gulay.ingestion.data.repository.ImportJobRepository;
 import io.gulay.ingestion.data.repository.IngestionStreamRepository;
 import io.gulay.user.data.model.AppUserReferenceModel;
@@ -75,5 +76,63 @@ class GovernedDatasetResolutionServiceTest {
         verify(imports)
                 .findFirstByEntityIdAndStatusAndRefinedBucketIsNotNullAndRefinedObjectKeyIsNotNullOrderByCompletedAtDesc(
                         entityId, "COMPLETED");
+    }
+
+    @Test
+    void bindsActiveStreamExecutionToLatestCommittedCheckpoint() {
+        val executionId = UUID.randomUUID();
+        val entityId = UUID.randomUUID();
+        val streamId = UUID.randomUUID();
+        val entity = mock(BusinessEntityModel.class);
+        val execution = mock(ExecutionRequestModel.class);
+        val owner = mock(AppUserReferenceModel.class);
+        val stream = mock(IngestionStreamModel.class);
+        val executions = mock(ExecutionRequestRepository.class);
+        val bindings = mock(ExecutionDatasetBindingRepository.class);
+        val imports = mock(ImportJobRepository.class);
+        val streamBindings = mock(ExecutionStreamBindingRepository.class);
+        val streams = mock(IngestionStreamRepository.class);
+        when(entity.getId()).thenReturn(entityId);
+        when(execution.getEntity()).thenReturn(entity);
+        when(execution.getId()).thenReturn(executionId);
+        when(execution.getOwner()).thenReturn(owner);
+        when(owner.getId()).thenReturn(UUID.randomUUID());
+        when(execution.getExecutionType()).thenReturn("ML");
+        when(execution.getExecutionOrderJson()).thenReturn("{}");
+        when(execution.getAuthorizationSnapshot()).thenReturn("{}");
+        when(execution.getConfigurationSnapshot()).thenReturn("{}");
+        when(executions.findById(executionId)).thenReturn(Optional.of(execution));
+        when(imports
+                .findFirstByEntityIdAndStatusAndRefinedBucketIsNotNullAndRefinedObjectKeyIsNotNullOrderByCompletedAtDesc(
+                        entityId, "COMPLETED"))
+                .thenReturn(Optional.empty());
+        when(stream.getId()).thenReturn(streamId);
+        when(stream.getEntity()).thenReturn(entity);
+        when(stream.getStatus()).thenReturn("INGESTING");
+        when(stream.getLastSequence()).thenReturn(42L);
+        when(stream.getLastOffset()).thenReturn(8_500L);
+        when(stream.getCumulativeRows()).thenReturn(215_000L);
+        when(streams
+                .findFirstByEntityIdAndLastSequenceIsNotNullAndLastOffsetIsNotNullOrderByUpdatedAtDesc(
+                        entityId))
+                .thenReturn(Optional.of(stream));
+
+        val response = new GovernedDatasetResolutionService(
+                executions, bindings, imports, streamBindings, streams,
+                new ObjectMapper(), Clock.systemUTC())
+                .resolve(executionId);
+
+        assertThat(response.executionId()).isEqualTo(executionId);
+        assertThat(response.entityId()).isEqualTo(entityId);
+        assertThat(response.streamId()).isEqualTo(streamId);
+        assertThat(response.throughSequence()).isEqualTo(42L);
+        assertThat(response.format()).isEqualTo("PARQUET_DATASET");
+        assertThat(response.rowCount()).isEqualTo(215_000L);
+        verify(streamBindings).save(org.mockito.ArgumentMatchers.argThat(binding ->
+                binding.getExecutionId().equals(executionId)
+                        && binding.getStream().getId().equals(streamId)
+                        && binding.getThroughSequence() == 42L
+                        && binding.getThroughOffset() == 8_500L
+                        && binding.getSnapshotRowCount() == 215_000L));
     }
 }

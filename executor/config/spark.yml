@@ -22,6 +22,10 @@ spark_config:
   spark.sql.shuffle.partitions: 16
   spark.sql.adaptive.enabled: "true"
   spark.sql.adaptive.coalescePartitions.enabled: "true"
+  # Execution-order timestamps use ISO-8601 UTC values. A fixed Spark session
+  # timezone prevents the host timezone from moving boundary rows into the
+  # following day or month.
+  spark.sql.session.timeZone: "UTC"
   spark.dynamicAllocation.enabled: "false"
   spark.dynamicAllocation.minExecutors: 1
   spark.dynamicAllocation.initialExecutors: 2

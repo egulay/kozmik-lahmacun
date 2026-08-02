@@ -221,11 +221,16 @@ export const api = {
     );
     return { ...response, items: response.columns };
   },
-  adminUsers: async (page = 0, size = 20): Promise<PageResponse<ManagedUser>> => {
+  adminUsers: async (
+    page = 0, size = 20, statuses: string[] = [], search = ''
+  ): Promise<PageResponse<ManagedUser>> => {
+    const query = new URLSearchParams({ page: String(page), size: String(size) });
+    if (search.trim()) query.set('search', search.trim());
+    statuses.forEach((status) => query.append('status', status));
     const response = await request<{
       users: ManagedUser[]; page: number; size: number; totalElements: number;
       totalPages: number; first: boolean; last: boolean;
-    }>(`/api/admin/users?page=${page}&size=${size}`);
+    }>(`/api/admin/users?${query}`);
     return { ...response, items: response.users };
   },
   createAdminUser: (value: {

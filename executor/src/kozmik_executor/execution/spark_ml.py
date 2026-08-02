@@ -462,8 +462,6 @@ class SparkMlExecutor:
     def _importance(feature_names, estimator_model):
         if hasattr(estimator_model, "featureImportances"):
             values = estimator_model.featureImportances.toArray().tolist()
-        elif hasattr(estimator_model, "coefficients"):
-            values = estimator_model.coefficients.toArray().tolist()
         elif hasattr(estimator_model, "get_feature_importances"):
             importance = estimator_model.get_feature_importances()
             values = [float(importance.get(f"f{index}", 0.0))
@@ -521,7 +519,32 @@ class SparkMlExecutor:
                 spark_fn.when(spark_fn.col("prediction") == spark_fn.col(target_column), 1.0)
                 .otherwise(0.0)
             ).alias("correct_rate"),
+            spark_fn.sum(
+                spark_fn.when((spark_fn.col("prediction") == 1.0)
+                              & (spark_fn.col(target_column) == 1.0), 1).otherwise(0)
+            ).alias("true_positive"),
+            spark_fn.sum(
+                spark_fn.when((spark_fn.col("prediction") == 1.0)
+                              & (spark_fn.col(target_column) == 0.0), 1).otherwise(0)
+            ).alias("false_positive"),
+            spark_fn.sum(
+                spark_fn.when((spark_fn.col("prediction") == 0.0)
+                              & (spark_fn.col(target_column) == 1.0), 1).otherwise(0)
+            ).alias("false_negative"),
+            spark_fn.sum(
+                spark_fn.when((spark_fn.col("prediction") == 0.0)
+                              & (spark_fn.col(target_column) == 0.0), 1).otherwise(0)
+            ).alias("true_negative"),
         ).first()
+        tp = int(aggregated["true_positive"])
+        fp = int(aggregated["false_positive"])
+        fn = int(aggregated["false_negative"])
+        tn = int(aggregated["true_negative"])
+        precision = tp / (tp + fp) if tp + fp else 0.0
+        recall = tp / (tp + fn) if tp + fn else 0.0
+        specificity = tn / (tn + fp) if tn + fp else 0.0
+        actual_positive_rate = (tp + fn) / total
+        baseline_accuracy = max(actual_positive_rate, 1.0 - actual_positive_rate)
         return [
             {"code": "AVERAGE_POSITIVE_PROBABILITY",
              "labelKey": "result.metric.averagePositiveProbability",
@@ -532,4 +555,20 @@ class SparkMlExecutor:
             {"code": "CORRECT_PREDICTION_RATE",
              "labelKey": "result.metric.correctPredictionRate",
              "value": float(aggregated["correct_rate"]) * 100, "unit": "PERCENT"},
+            {"code": "POSITIVE_PRECISION",
+             "labelKey": "result.metric.positivePrecision",
+             "value": precision * 100, "unit": "PERCENT"},
+            {"code": "POSITIVE_RECALL",
+             "labelKey": "result.metric.positiveRecall",
+             "value": recall * 100, "unit": "PERCENT"},
+            {"code": "SPECIFICITY", "labelKey": "result.metric.specificity",
+             "value": specificity * 100, "unit": "PERCENT"},
+            {"code": "ACTUAL_POSITIVE_RATE",
+             "labelKey": "result.metric.actualPositiveRate",
+             "value": actual_positive_rate * 100, "unit": "PERCENT"},
+            {"code": "BASELINE_ACCURACY",
+             "labelKey": "result.metric.baselineAccuracy",
+             "value": baseline_accuracy * 100, "unit": "PERCENT"},
+            {"code": "TEST_CASE_COUNT", "labelKey": "result.metric.testCaseCount",
+             "value": total, "unit": "COUNT"},
         ]

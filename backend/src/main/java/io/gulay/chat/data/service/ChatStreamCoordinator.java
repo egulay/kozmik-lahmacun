@@ -20,6 +20,7 @@ import java.util.UUID;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -82,6 +83,15 @@ public class ChatStreamCoordinator {
                         visibleEntities, classification);
                 return;
             }
+            if ("UNSUPPORTED_LANGUAGE".equals(classification.intent())) {
+                val response = classification.unsupportedLanguageResponse();
+                if (response == null || response.isBlank()) {
+                    throw new IllegalStateException(
+                            "Unsupported-language classification omitted its safe response");
+                }
+                complete(request, classification, response);
+                return;
+            }
             if (!"CONVERSATIONAL".equals(classification.intent())) {
                 throw new IllegalStateException("Unsupported intent classification");
             }
@@ -118,7 +128,12 @@ public class ChatStreamCoordinator {
         return new PythonChatContracts.EntityMetadata(
                 entity.id(), entity.name(), entity.description(),
                 schema.columns().stream()
-                        .map(EntityDtos.ColumnDefinition::columnName).toList());
+                        .map(EntityDtos.ColumnDefinition::columnName).toList(),
+                schema.columns().stream()
+                        .flatMap(column -> Stream.of(
+                                column.businessName(), column.businessNameTr()))
+                        .filter(value -> value != null && !value.isBlank())
+                        .distinct().toList());
     }
 
     private void acceptExecutionRequest(

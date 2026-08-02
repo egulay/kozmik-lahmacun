@@ -220,6 +220,21 @@ class TrustedReportWorker:
         result.pop("summaryFacts", None)
         result["summaryStatus"] = explanation.status
         result["managementSummary"] = explanation.text
+        result["summaryEvidence"] = explanation.evidence.model_dump(
+            by_alias=True, mode="json"
+        )
+        result["summaryValidationStatus"] = explanation.validation_status
+        result["summaryValidationIssues"] = explanation.validation_issues
+        result["summaryAudit"] = (
+            explanation.summary_audit.model_dump(by_alias=True, mode="json")
+            if explanation.summary_audit is not None else None
+        )
+        result["summaryBlockingIssues"] = explanation.blocking_issues
+        result["summaryAdvisoryIssues"] = explanation.advisory_issues
+        result["summaryRepairAttemptCount"] = explanation.repair_attempt_count
+        result["summaryProvider"] = explanation.provider
+        result["summaryProviderModel"] = explanation.provider_model
+        result["summaryGeneratedAt"] = explanation.generated_at
         await self.publish_result(ExecutionResultNotification(
             schema_version="1.0",
             event_id=uuid5(EVENT_NAMESPACE, f"{command.event_id}:result"),

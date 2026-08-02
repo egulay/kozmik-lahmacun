@@ -3,7 +3,7 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from kozmik_executor.chat.api import _messages, _response_language
+from kozmik_executor.chat.api import _capability_answer, _messages, _response_language
 from kozmik_executor.main import app
 from kozmik_executor.chat.models import ChatStreamRequest
 
@@ -29,10 +29,23 @@ def events(response_text: str) -> list[dict[str, object]]:
 def test_chat_prompt_requires_latest_message_language(deterministic_effective_configuration) -> None:
     request = ChatStreamRequest.model_validate(request_body("Merhaba"))
 
-    system_prompt = _messages(request, deterministic_effective_configuration.llm)[0]["content"]
+    messages = _messages(request, deterministic_effective_configuration.llm)
+    system_prompt = messages[0]["content"]
 
     assert "mandatory response language for this turn is Turkish" in system_prompt
     assert "latest user message" in system_prompt
+
+
+def test_chat_stream_does_not_repeat_language_gate_handling(
+    deterministic_effective_configuration,
+) -> None:
+    request = ChatStreamRequest.model_validate(request_body("Bonjour, qui êtes-vous ?"))
+
+    messages = _messages(request, deterministic_effective_configuration.llm)
+    system_prompt = messages[0]["content"]
+
+    assert "Only English and Turkish are supported" not in system_prompt
+    assert "Do not introduce or explain your identity" in system_prompt
 
 
 def test_chat_language_is_determined_from_latest_message_not_ui_language(
@@ -60,6 +73,32 @@ def test_chat_language_is_determined_from_latest_message_not_ui_language(
     assert "mandatory response language for this turn is English" in english_prompt
 
 
+def test_turkish_proper_noun_does_not_override_english_sentence_language(
+    deterministic_effective_configuration,
+) -> None:
+    request = ChatStreamRequest.model_validate({
+        **request_body("Ok. I understood. What is the weather like in Türkiye"),
+        "language": "en",
+        "history": [
+            {"role": "user", "content": "So ist es, haha, es hat mir gefallen."},
+            {"role": "assistant", "content": "Bitte formulieren Sie Ihre Anfrage erneut."},
+            {"role": "user", "content": "Ok. I understood. What is the weather like in Türkiye"},
+        ],
+    })
+
+    assert _response_language(request) == "English"
+    system_prompt = _messages(request, deterministic_effective_configuration.llm)[0]["content"]
+    assert "mandatory response language for this turn is English" in system_prompt
+
+
+def test_turkish_sentence_with_turkiye_remains_turkish() -> None:
+    request = ChatStreamRequest.model_validate(
+        request_body("Türkiye'de hava nasıl?")
+    )
+
+    assert _response_language(request) == "Turkish"
+
+
 def test_chat_prompt_explains_capabilities_in_business_language(
     deterministic_effective_configuration,
 ) -> None:
@@ -67,7 +106,7 @@ def test_chat_prompt_explains_capabilities_in_business_language(
 
     system_prompt = _messages(request, deterministic_effective_configuration.llm)[0]["content"]
 
-    assert "return the following localized capability answer exactly" in system_prompt
+    assert "latest message explicitly asks about identity or capabilities" in system_prompt
     assert "I am an AI assistant designed to help business users" in system_prompt
     assert "Once your data is available in the system" in system_prompt
     assert "Example requests:" in system_prompt
@@ -102,15 +141,63 @@ def test_chat_prompt_treats_identity_questions_as_capability_questions(
         "Ne iş yaparsın?",
         "Neler yapabilirsin?",
         "Bana nasıl yardımcı olursun?",
+        "Selam. Seni anneme gösteriyorum. Ne olduğunu söyler misin?",
+        "Seni anneme tanıtıyorum. ne iş yaptığını söyler misin?",
+        "Yaptığın iş nedir?",
     ):
         request = ChatStreamRequest.model_validate(request_body(content))
         system_prompt = _messages(
             request, deterministic_effective_configuration.llm
         )[0]["content"]
 
-        assert "who or what you are" in system_prompt
-        assert "equivalent identity or capability question" in system_prompt
+        assert "latest message explicitly asks about identity or capabilities" in system_prompt
         assert "localized capability answer exactly" in system_prompt
+
+
+def test_turkish_capability_variants_bypass_free_form_provider(monkeypatch) -> None:
+    monkeypatch.setenv("INTERNAL_API_KEY", "test-internal-key")
+
+    for content in (
+        "Seni anneme tanıtıyorum. ne iş yaptığını söyler misin?",
+        "Yaptığın iş nedir?",
+    ):
+        response = TestClient(app).post(
+            "/internal/v1/chat/stream",
+            headers={"X-Internal-API-Key": "test-internal-key"},
+            json=request_body(content),
+        )
+        streamed = events(response.text)
+
+        assert streamed[-1]["type"] == "message-completed"
+        assert streamed[-1]["content"] == _capability_answer("Turkish")
+        assert "herhangi bir konuda" not in streamed[-1]["content"].casefold()
+        assert "Mock response" not in streamed[-1]["content"]
+
+
+def test_normal_turkish_small_talk_does_not_receive_capability_template(
+    deterministic_effective_configuration,
+) -> None:
+    request = ChatStreamRequest.model_validate({
+        **request_body("tamam anladım. bak Türkçe yazıyorum nasılsın?"),
+        "history": [
+            {"role": "user", "content": "É assim que eu gosto."},
+            {"role": "assistant", "content": "Portuguese language guidance"},
+            {"role": "user", "content": "Így szeretem."},
+            {"role": "assistant", "content": "Hungarian language guidance"},
+            {"role": "user", "content": "tamam anladım. bak Türkçe yazıyorum nasılsın?"},
+        ],
+    })
+
+    messages = _messages(request, deterministic_effective_configuration.llm)
+    system_prompt = messages[0]["content"]
+
+    assert "mandatory response language for this turn is Turkish" in system_prompt
+    assert "latest message explicitly asks about identity or capabilities" not in system_prompt
+    assert "Şirket verilerinizi raporlara" not in system_prompt
+    assert "Do not introduce or explain your identity" in system_prompt
+    assert [message["content"] for message in messages[1:]] == [
+        "tamam anladım. bak Türkçe yazıyorum nasılsın?"
+    ]
 
 
 def test_streams_deterministic_completion(monkeypatch) -> None:

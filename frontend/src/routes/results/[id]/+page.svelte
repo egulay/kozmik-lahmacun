@@ -22,6 +22,9 @@
   import DeleteExecutionButton from '$lib/components/DeleteExecutionButton.svelte';
   import PdfExportButton from '$lib/components/PdfExportButton.svelte';
   import ServerPagination from '$lib/components/ServerPagination.svelte';
+  import ProgressStageIcon from '$lib/components/ProgressStageIcon.svelte';
+  import MarkdownMessage from '$lib/components/MarkdownMessage.svelte';
+  import ExecutionTypeIcon from '$lib/components/ExecutionTypeIcon.svelte';
   import type { Execution } from '$lib/types';
   import {
     formatDate,
@@ -114,6 +117,7 @@
   const columnLabels = $derived(normalizeColumnLabels(previewData));
   const charts = $derived(normalizeCharts(result?.charts));
   const isMl = $derived(Boolean(execution?.executionType?.toUpperCase().includes('ML') || metrics.length));
+  const timelineHistory = $derived(execution?.history?.toReversed() ?? []);
   const orderPayload = $derived.by(() => {
     const payload = execution?.order?.payload;
     return payload && typeof payload === 'object'
@@ -553,8 +557,23 @@
   }
 
   function stageLabel(stage: string) {
+    if (stage === 'PLANNING') return $t('timelineStagePlanning');
+    if (stage === 'VALIDATING') return $t('timelineStageValidating');
+    if (stage === 'QUEUED') return $t('timelineStageQueued');
+    if (stage === 'PREPARING') return $t('timelineStagePreparing');
     if (stage === 'RESOLVING_DATA') return $t('resolvingData');
     if (stage === 'TUNING') return $t('tuningModels');
+    if (stage === 'TRAINING') return $t('timelineStageTraining');
+    if (stage === 'RUNNING') return $t('timelineStageRunning');
+    if (stage === 'WRITING_RESULTS') return $t('timelineStageWritingResults');
+    if (stage === 'SUMMARIZING') return $t('timelineStageSummarizing');
+    if (stage === 'COMPLETED') return $t('timelineStageCompleted');
+    if (stage === 'FAILED') return $t('timelineStageFailed');
+    if (stage === 'CANCELLED') return $t('timelineStageCancelled');
+    if (stage === 'TIMED_OUT') return $t('timelineStageTimedOut');
+    if (stage === 'CANCELLATION_REQUESTED') {
+      return $t('timelineStageCancellationRequested');
+    }
     return stage.replaceAll('_', ' ');
   }
 
@@ -568,6 +587,16 @@
 <div class="pdf-document">
 <div class="pdf-brand"><strong>{$t('brand')}</strong><span>{$t('governedAnalytics')}</span></div>
 <PageHeader title={$t('resultTitle')} description={result?.executionId}>
+  {#snippet icon()}
+    {#if execution}
+      <ExecutionTypeIcon
+        kind={execution.executionType}
+        status="SUCCEEDED"
+        context="result"
+        class="size-5 text-muted-foreground"
+      />
+    {/if}
+  {/snippet}
   {#snippet actions()}
     <div class="flex flex-wrap justify-end gap-2">
       {#if execution && result && execution.status === 'SUCCEEDED'}
@@ -596,7 +625,7 @@
     <TriangleAlert />
     <Alert.Title>{$t('failureReason')}</Alert.Title>
     <Alert.Description class="space-y-3 leading-relaxed">
-      <p>{failureExplanation}</p>
+      <MarkdownMessage content={failureExplanation} />
       {#if execution.failure}
         <div class="rounded-md border border-destructive/30 bg-background/60 p-3 text-foreground">
           <strong class="text-sm">{$t('sanitizedReason')}</strong>
@@ -611,19 +640,19 @@
     </Alert.Description>
   </Alert.Root>
 
-  {#if execution.history.length}
+  {#if timelineHistory.length}
     <Card.Root class="pdf-breakable pdf-exclude">
       <Card.Header>
         <Card.Title class="text-base">{$t('timeline')}</Card.Title>
-        <Card.Description>{execution.history.length} {$t('status')}</Card.Description>
+        <Card.Description>{timelineHistory.length} {$t('status')}</Card.Description>
       </Card.Header>
       <Card.Content>
         <ol>
-          {#each execution.history as item, index}
+          {#each timelineHistory as item, index}
             <li class="grid grid-cols-[auto_1fr_auto] gap-3 py-3">
-              <span class="mt-1.5 size-2.5 rounded-full bg-muted-foreground"></span>
+              <ProgressStageIcon stage={item.stage} />
               <div>
-                <strong class="text-sm">{stageLabel(item.stage)}</strong>
+                <strong class="text-sm uppercase">{stageLabel(item.stage)}</strong>
                 <small class="block text-xs text-muted-foreground">
                   {formatDate(item.occurredAt, $locale === 'tr' ? 'tr-TR' : 'en-US')}
                 </small>
@@ -631,7 +660,7 @@
               </div>
               <Badge variant="secondary">{item.progressPercent}%</Badge>
             </li>
-            {#if index < execution.history.length - 1}<Separator />{/if}
+            {#if index < timelineHistory.length - 1}<Separator />{/if}
           {/each}
         </ol>
       </Card.Content>
@@ -780,27 +809,27 @@
     </Card.Root>
   </section>
 
-  {#if execution?.history?.length}
+  {#if timelineHistory.length}
     <section class="pdf-exclude" aria-labelledby="timeline-title">
       <h2 id="timeline-title" class="mb-3 mt-4 text-lg font-semibold">{$t('timeline')}</h2>
       <Card.Root class="pdf-breakable">
         <Card.Header>
           <Card.Title class="text-base">{$t('timeline')}</Card.Title>
-          <Card.Description>{execution.history.length} {$t('status')}</Card.Description>
+          <Card.Description>{timelineHistory.length} {$t('status')}</Card.Description>
         </Card.Header>
         <Card.Content>
           <ol>
-            {#each execution.history as item, index}
+            {#each timelineHistory as item, index}
               <li class="grid grid-cols-[auto_1fr_auto] gap-3 py-3">
-                <span class={`mt-1.5 size-2.5 rounded-full ${item.progressPercent === 100 ? 'bg-primary' : 'bg-muted-foreground'}`}></span>
+                <ProgressStageIcon stage={item.stage} />
                 <div>
-                  <strong class="text-sm">{stageLabel(item.stage)}</strong>
+                  <strong class="text-sm uppercase">{stageLabel(item.stage)}</strong>
                   <small class="block text-xs text-muted-foreground">{formatDate(item.occurredAt, $locale === 'tr' ? 'tr-TR' : 'en-US')}</small>
                   <p class="mt-1 text-sm text-muted-foreground">{item.messageCode}</p>
                 </div>
                 <Badge variant="secondary">{item.progressPercent}%</Badge>
               </li>
-              {#if index < execution.history.length - 1}<Separator />{/if}
+              {#if index < timelineHistory.length - 1}<Separator />{/if}
             {/each}
           </ol>
         </Card.Content>

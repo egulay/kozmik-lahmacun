@@ -48,9 +48,11 @@ public final class ExecutionDtos {
     }
 
     public record ExecutionSummaryResponse(
-            UUID id, String executionType, String status, UUID entityId, String entityName,
-            String requester, String originalRequest, Instant requestedAt,
-            Instant startedAt, Instant completedAt) {
+            UUID id, String executionType, String status, UUID entityId,
+            String entityName, String entityNameTr, String requester,
+            String originalRequest, Instant requestedAt,
+            Instant startedAt, Instant completedAt, String latestStage,
+            Integer latestProgressPercent) {
     }
 
     public record ExecutionListResponse(

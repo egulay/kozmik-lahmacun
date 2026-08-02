@@ -23,7 +23,6 @@
   let pageSize = $state(20);
   let totalElements = $state(0);
   let totalPages = $state(0);
-  let registeredStructureCount = $state(0);
 
   onMount(() => {
     openWorkspaceTab({
@@ -52,7 +51,6 @@
       pageNumber = response.page;
       totalElements = response.totalElements;
       totalPages = response.totalPages;
-      registeredStructureCount = response.registeredStructureCount ?? 0;
       error = '';
     }
     catch { error = $t('apiUnavailable'); }
@@ -114,17 +112,11 @@
   <StateView loading={loading && entities.length === 0} {error} empty={!loading && !error && !entities.length} onretry={load} />
 </div>
 {#if !error && (!loading || entities.length)}
-  <div class="mb-4 grid gap-4 sm:grid-cols-2">
+  <div class="mb-4 grid gap-4 sm:max-w-sm">
     <Card.Root>
       <Card.Header>
         <Card.Description>{$t('registeredEntities')}</Card.Description>
         <Card.Title class="text-3xl">{totalElements}</Card.Title>
-      </Card.Header>
-    </Card.Root>
-    <Card.Root>
-      <Card.Header>
-        <Card.Description>{$t('registeredSchemas')}</Card.Description>
-        <Card.Title class="text-3xl">{registeredStructureCount}</Card.Title>
       </Card.Header>
     </Card.Root>
   </div>

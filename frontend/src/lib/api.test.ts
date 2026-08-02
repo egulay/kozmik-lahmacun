@@ -128,4 +128,38 @@ describe('API CSRF protection', () => {
       expect.objectContaining({ credentials: 'include' })
     );
   });
+
+  it('sends execution search and status filters to the server', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      executions: [], page: 0, size: 20, totalElements: 0, totalPages: 0,
+      first: true, last: true
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { api } = await import('./api');
+
+    await api.executionPage({
+      page: 0, size: 20, statuses: ['SUCCEEDED', 'FAILED'], search: '  Marmara  '
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/executions?page=0&size=20&search=Marmara&status=SUCCEEDED&status=FAILED',
+      expect.objectContaining({ credentials: 'include' })
+    );
+  });
+
+  it('sends user search and status filters to the server', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      users: [], page: 0, size: 20, totalElements: 0, totalPages: 0,
+      first: true, last: true
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { api } = await import('./api');
+
+    await api.adminUsers(0, 20, ['SUSPENDED'], '  scientist  ');
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/admin/users?page=0&size=20&search=scientist&status=SUSPENDED',
+      expect.objectContaining({ credentials: 'include' })
+    );
+  });
 });

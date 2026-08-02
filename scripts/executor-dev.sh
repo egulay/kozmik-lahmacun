@@ -14,11 +14,17 @@ load_deployment_secrets
 
 readonly executor_root="${REPOSITORY_ROOT}/executor"
 readonly python_binary="${executor_root}/.venv/bin/python"
+readonly dependency_stamp="${executor_root}/.venv/.kozmik-pyproject.toml"
 
 if [[ ! -x "${python_binary}" ]]; then
   python3 -m venv "${executor_root}/.venv"
   "${python_binary}" -m pip install --upgrade pip
+fi
+
+if [[ ! -f "${dependency_stamp}" ]] \
+  || ! cmp -s "${executor_root}/pyproject.toml" "${dependency_stamp}"; then
   "${python_binary}" -m pip install --editable "${executor_root}"
+  cp "${executor_root}/pyproject.toml" "${dependency_stamp}"
 fi
 
 export PYSPARK_PYTHON="${python_binary}"

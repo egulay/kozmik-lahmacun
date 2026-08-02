@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { CircleAlert, KeyRound, MoreHorizontal, Pencil, Pause, Play, Plus, Trash2 } from '@lucide/svelte';
+  import { CircleAlert, KeyRound, MoreHorizontal, Pencil, Pause, Play, Plus, Search, Trash2 } from '@lucide/svelte';
   import { api } from '$lib/api';
   import type { ManagedUser, Role } from '$lib/types';
-  import { t } from '$lib/i18n';
+  import { locale, statusLabel, t } from '$lib/i18n';
   import { currentUser } from '$lib/session';
   import AdminGuard from '$lib/components/AdminGuard.svelte';
   import StatusBadge from '$lib/components/StatusBadge.svelte';
@@ -15,6 +15,7 @@
   import * as Dialog from '$lib/components/ui/dialog/index.js';
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
   import * as Tooltip from '$lib/components/ui/tooltip/index.js';
+  import * as Select from '$lib/components/ui/select/index.js';
   import PageHeader from '$lib/components/PageHeader.svelte';
   import StateView from '$lib/components/StateView.svelte';
   import ServerPagination from '$lib/components/ServerPagination.svelte';
@@ -33,6 +34,9 @@
   let email = $state('');
   let roles = $state<Role[]>([]);
   let saving = $state(false);
+  let search = $state('');
+  let status = $state('ALL');
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
   onMount(() => {
     openWorkspaceTab({
@@ -46,7 +50,9 @@
   async function load(targetPage = page) {
     loading = true;
     try {
-      const response = await api.adminUsers(targetPage, size);
+      const response = await api.adminUsers(
+        targetPage, size, status === 'ALL' ? [] : [status], search
+      );
       users = response.items;
       page = response.page;
       totalElements = response.totalElements;
@@ -127,6 +133,17 @@
     void load(0);
   }
 
+  function scheduleSearch() {
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => void load(0), 300);
+  }
+
+  function changeStatus(value: string | undefined) {
+    if (!value) return;
+    status = value;
+    void load(0);
+  }
+
   function isCurrentUser(user: ManagedUser | null) {
     return Boolean(user && user.keycloakUserId === $currentUser?.userId);
   }
@@ -138,9 +155,30 @@
     <Button onclick={openCreate}><Plus />{$t('addUser')}</Button>
   </div>
   <StateView loading={loading && users.length === 0} {error} empty={!loading && !error && users.length === 0} onretry={load} />
-  {#if users.length}
-    <Card.Root>
-      <Card.Content
+  <Card.Root>
+    <Card.Content class="pt-6">
+      <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:justify-between">
+        <label class="relative w-full sm:max-w-sm">
+          <span class="sr-only">{$t('search')}</span>
+          <Search class="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={17} aria-hidden="true" />
+          <Input bind:value={search} oninput={scheduleSearch} placeholder={$t('search')} class="pl-9" />
+        </label>
+        <label>
+          <span class="sr-only">{$t('status')}</span>
+          <Select.Root type="single" value={status} onValueChange={changeStatus}>
+            <Select.Trigger class="w-[180px]">
+              {status === 'ALL' ? $t('allStatuses') : statusLabel(status, $locale)}
+            </Select.Trigger>
+            <Select.Content>
+              <Select.Item value="ALL">{$t('allStatuses')}</Select.Item>
+              <Select.Item value="ACTIVE">{statusLabel('ACTIVE', $locale)}</Select.Item>
+              <Select.Item value="SUSPENDED">{statusLabel('SUSPENDED', $locale)}</Select.Item>
+            </Select.Content>
+          </Select.Root>
+        </label>
+      </div>
+      {#if users.length}
+      <div
         class={`overflow-x-auto pt-6 transition-opacity duration-150 ${loading ? 'opacity-60' : ''}`}
         aria-busy={loading}
       >
@@ -185,9 +223,10 @@
         </Table.Root>
         <ServerPagination {page} {size} {totalElements} {totalPages}
           disabled={loading} onPage={(value) => load(value)} onSize={changeSize} />
-      </Card.Content>
-    </Card.Root>
-  {/if}
+      </div>
+      {/if}
+    </Card.Content>
+  </Card.Root>
 </AdminGuard>
 
 <Dialog.Root open={dialog !== null} onOpenChange={(open) => { if (!open) dialog = null; }}>
