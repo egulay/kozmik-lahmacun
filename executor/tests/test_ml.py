@@ -19,6 +19,7 @@ from kozmik_executor.planning.api import (
 from kozmik_executor.planning.ml import validate_ml_order
 from kozmik_executor.planning.ml import ALGORITHM_REGISTRY
 from kozmik_executor.planning.models import (
+    AuthorizedColumn,
     MlOrder,
     ReportPlanningRequest,
 )
@@ -113,6 +114,31 @@ def test_binary_threshold_target_is_governed_and_prevents_leakage():
     assert "DERIVED_TARGET_SOURCE_IS_FEATURE" in {
         issue.code for issue in error.value.issues
     }
+
+
+def test_boolean_source_column_is_allowed_only_as_binary_classification_target():
+    planning = request()
+    planning.authorized_schema.columns.append(AuthorizedColumn.model_validate({
+        "columnName": "is_fraud", "businessName": "Confirmed fraud",
+        "dataType": "BOOLEAN",
+    }))
+    value = order(planning).model_dump(by_alias=True, mode="json")
+    value["payload"].update({
+        "problemType": "BINARY_CLASSIFICATION",
+        "algorithm": "LOGISTIC_REGRESSION",
+        "targetColumn": "is_fraud",
+        "metrics": ["ACCURACY", "F1", "AUC"],
+    })
+    governed = MlOrder.model_validate(value)
+
+    validate_ml_order(governed, planning)
+
+    governed.payload.problem_type = "REGRESSION"
+    governed.payload.algorithm = "LINEAR_REGRESSION"
+    governed.payload.metrics = ["RMSE"]
+    with pytest.raises(PlanningValidationError) as error:
+        validate_ml_order(governed, planning)
+    assert "TARGET_NOT_ALLOWED" in {issue.code for issue in error.value.issues}
 
 
 def test_what_if_validation_allows_only_governed_numeric_features():
@@ -565,6 +591,35 @@ def test_binary_threshold_target_is_created_inside_trusted_spark(
         asyncio.Event()))
 
     assert {row["high_revenue"] for row in result["preview"]["rows"]} <= {0.0, 1.0}
+    assert "positiveProbability" in {
+        item["name"] for item in result["preview"]["columns"]
+    }
+
+
+def test_boolean_binary_target_is_cast_inside_trusted_spark(tmp_path, spark):
+    source = tmp_path / "boolean-binary-target.json"
+    source.write_text("\n".join(json.dumps({
+        "units": float(index),
+        "price": float(index % 7),
+        "revenue": float(index + index % 7),
+        "is_fraud": index % 5 == 0,
+    }) for index in range(1, 101)), encoding="utf-8")
+    value = order(request()).model_dump(by_alias=True, mode="json")
+    value["payload"].update({
+        "problemType": "BINARY_CLASSIFICATION",
+        "algorithm": "LOGISTIC_REGRESSION",
+        "targetColumn": "is_fraud",
+        "parameters": {"maxIter": 30, "regParam": 0.0},
+        "metrics": ["ACCURACY", "F1", "AUC"],
+    })
+    governed = MlOrder.model_validate(value)
+
+    result = asyncio.run(SparkMlExecutor(spark, MemoryMinio()).execute(
+        uuid4(), governed,
+        {"datasetUri": str(source), "datasetFormat": "json", "timeoutSeconds": 120},
+        asyncio.Event()))
+
+    assert {row["is_fraud"] for row in result["preview"]["rows"]} <= {0.0, 1.0}
     assert "positiveProbability" in {
         item["name"] for item in result["preview"]["columns"]
     }

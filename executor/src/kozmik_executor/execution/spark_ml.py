@@ -102,6 +102,12 @@ class SparkMlExecutor:
         data = data.select(
             *order.payload.feature_columns, order.payload.target_column).dropna()
         if order.payload.problem_type == "BINARY_CLASSIFICATION":
+            # Spark classifiers require a numeric label. Governed schemas may
+            # expose a natural boolean historical outcome such as is_fraud.
+            data = data.withColumn(
+                order.payload.target_column,
+                spark_fn.col(order.payload.target_column).cast("double"),
+            )
             labels = {
                 float(row[0])
                 for row in data.select(order.payload.target_column).distinct().limit(3).collect()

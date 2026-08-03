@@ -8,6 +8,7 @@ from kozmik_executor.planning.validation import PlanningValidationError
 from kozmik_executor.planning.registries import FILTER_TYPES
 
 NUMERIC = {DataType.INTEGER, DataType.LONG, DataType.DECIMAL}
+BINARY_TARGET_TYPES = NUMERIC | {DataType.BOOLEAN}
 REGRESSION_METRICS = {"RMSE", "MAE", "R2"}
 CLASSIFICATION_METRICS = {"ACCURACY", "F1", "PRECISION", "RECALL", "AUC"}
 TREE_PARAMETERS = {
@@ -105,9 +106,19 @@ def validate_ml_order(order: MlOrder, request: ReportPlanningRequest) -> None:
     columns = {column.column_name: column for column in request.authorized_schema.columns}
     target = columns.get(order.payload.target_column)
     derivation = order.payload.binary_target_derivation
-    if derivation is None and (target is None or target.data_type not in NUMERIC):
+    allowed_target_types = (
+        BINARY_TARGET_TYPES
+        if order.payload.problem_type == "BINARY_CLASSIFICATION"
+        else NUMERIC
+    )
+    if derivation is None and (
+        target is None or target.data_type not in allowed_target_types
+    ):
         issues.append(ValidationIssue(code="TARGET_NOT_ALLOWED", path="payload.targetColumn",
-                                      message="Target must be an eligible numeric column"))
+                                      message=(
+                                          "Regression targets must be numeric; binary "
+                                          "classification targets may be numeric or boolean"
+                                      )))
     if derivation is not None:
         source = columns.get(derivation.source_column)
         if order.payload.problem_type != "BINARY_CLASSIFICATION":
@@ -310,6 +321,9 @@ return bounded candidateAlgorithms parameter grids plus a TRAIN_VALIDATION_SPLIT
 Never exceed 50 proposed trials. Prefer the simplest suitable candidates unless the objective
 justifies tree, ensemble, gradient-boosted, or XGBoost models. Choose representative tuning
 values inside the approved ranges; do not mechanically use the minimum and maximum bounds.
+For an existing authorized BOOLEAN outcome column, use BINARY_CLASSIFICATION and preserve that
+exact columnName as targetColumn. A BOOLEAN target is already binary; do not invent an alias or
+binaryTargetDerivation for it.
 When the user asks which records are likely to exceed or fall below a numeric threshold, use
 BINARY_CLASSIFICATION with binaryTargetDerivation. Set sourceColumn to the authorized numeric
 column, operator to GT, GTE, LT, or LTE, threshold to the requested numeric boundary, and use a

@@ -9,6 +9,7 @@ Result: **PASS**
 | --- | --- |
 | Telecom CDR demo | Deterministic generator produced exactly 1,000,000 rows (81 MiB) |
 | Sales demo | Deterministic generator produced exactly 50,000 rows (3.2 MiB) |
+| Payment transactions demo | Deterministic generator produces exactly 100,000 labelled synthetic transactions for reporting and supervised fraud-classification scenarios |
 | Batch CDR ingestion | Spark validates the fixed CDR schema and writes governed Parquet to MinIO |
 | Event-driven sales ingestion | Filename-contract upload uses MinIO `ObjectCreated` -> Kafka; no polling |
 | Reporter scenarios | Turkish sales and English CDR governed-report scenarios |
@@ -16,6 +17,7 @@ Result: **PASS**
 | Admin scenario | Configuration, signed restart, drain, replay rejection and reload checklist |
 | Turkish/English UI | Playwright verifies locale switch, translated privacy text and document language |
 | Summary input | Recording-provider tests prove the original request, schema, total count and result information are supplied; complete result rows are included through 100 rows and omitted above 100 |
+| Summary preference | Java tests verify default inclusion and explicit English/Turkish opt-out; skipped summaries do not call the provider and are omitted by the UI/PDF contract |
 | Execution | Deterministic worker, Spark report and Spark ML tests cover lifecycle through result artifacts |
 | SSE recovery | Frontend test proves event-ID deduplication and authoritative REST reload before reconnect |
 | Public packaging | Public README is concise; private `analysis/` material is ignored by default |
@@ -48,6 +50,9 @@ Observed results:
   calculated execution-result rows only when the complete result contains at
   most 100 rows; larger results include the authoritative count and non-row
   result information instead.
+- Summary generation is enabled by default and can be explicitly excluded in
+  the original English or Turkish request. Exclusion persists `SKIPPED` and
+  prevents the post-execution LLM call.
 - No secrets are embedded in generated data, scripts, scenarios or documentation.
 - The browser continues to communicate only with Java.
 - Python has no PostgreSQL, Keycloak or Docker control dependency.

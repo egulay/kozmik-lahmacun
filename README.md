@@ -27,9 +27,9 @@ then does trusted Spark code process data inside the controlled environment.
 Arbitrary SQL, generated Python, generated shell commands, and arbitrary
 executable code are not accepted.
 
-After Spark finishes, the LLM receives that bounded execution-result contract
-to produce a plain-language business summary. This
-applies to both reports and ML results. A non-technical manager can therefore
+After Spark finishes, the LLM receives the final calculated result contract—not
+the ingested corporate source data—to produce a plain-language business
+summary. This applies to both reports and ML results. A non-technical manager can therefore
 ask for a grouped sales comparison, a prediction, or a controlled scenario
 analysis and receive the calculation, visualizations, relevant limitations,
 and a concise business explanation in the same interface.
@@ -44,8 +44,10 @@ operational hardening, and product behavior continue to evolve.
 
 The product interface currently supports **English and Turkish only**.
 Prompts in English receive English responses; prompts in Turkish receive
-Turkish responses. Other prompt languages fall back to English. Persisted
-results retain the language selected when their execution was planned.
+Turkish responses. For other languages, the assistant replies in the detected
+language only to state that communication and analysis requests must be
+resubmitted in English or Turkish. Persisted results retain the language
+selected when their execution was planned.
 
 ## What the platform enables
 
@@ -67,7 +69,7 @@ Natural-language request
   -> deterministic validation
   -> trusted Spark operations
   -> governed result and artifacts
-  -> privacy-safe result explanation
+  -> result summary from calculated outputs
 ```
 
 Users do not need to select an estimator, construct filters or aggregations,
@@ -117,7 +119,7 @@ flowchart LR
     Python --> Spark
     Python --> MinIO
     Python -->|"event, ingestion and stream idempotency"| SQLite
-    Python -->|"metadata, prompts and bounded facts only"| LLM
+    Python -->|"planning metadata or calculated result contract"| LLM
     Vault --> Java
     Vault --> Python
     Vault -->|"bootstrap secrets"| Keycloak
@@ -156,8 +158,8 @@ sequenceDiagram
     Python->>Kafka: Lifecycle and result metadata
     Kafka->>Java: Transactional authoritative update
     Java-->>UI: REST state and SSE notification
-    Python->>LLM: Bounded KPIs, metrics, warnings and approved facts
-    LLM-->>Python: Management-oriented explanation
+    Python->>LLM: Original request + final calculated result contract
+    LLM-->>Python: Plain-language result summary
     Python->>Kafka: Summary result
     Java-->>UI: Completed result and summary
 ```
@@ -539,7 +541,7 @@ retention, competitor response, or other unmeasured effects.
 
 ## Result summaries and privacy
 
-Result explanation is a separate, non-critical stage after trusted
+Result summary generation is a separate, non-critical stage after trusted
 execution:
 
 1. Spark finishes and durable artifacts are written.
@@ -554,6 +556,28 @@ execution:
 6. The configured LLM writes a Turkish or English result summary that answers
    the original business request; no application-level summary-length limit is imposed.
 7. Java persists the summary status and text with the result.
+
+Summary generation is **enabled by default**. The user can explicitly disable
+it in the original English or Turkish request, for example:
+
+- `Show monthly sales by region without a summary.`
+- `Exclude the result summary.`
+- `Bölge bazında aylık satışları göster, özeti dahil etme.`
+- `Özetsiz bölgesel satış raporu hazırla.`
+
+When summary generation is disabled, Python does not make the post-execution
+LLM call, Java persists the summary state as `SKIPPED`, and the Summary/Özet
+section is omitted from both the result view and PDF export. Asking to
+“include a summary” is optional because inclusion is already the default.
+
+This boundary is important: the summary request contains the **final
+calculated output** and its schema, not the CSV/Kafka source records or the
+governed Parquet source dataset. If the final result contains at most 100 rows,
+all of those calculated result rows are supplied so the LLM can explain the
+actual answer. If it contains more than 100 rows, no result rows are supplied;
+the authoritative row count and the remaining indicators, metrics, charts,
+model-selection facts, scenarios, and warnings are still supplied. The source
+schema is included to preserve field, unit, currency, and categorical meaning.
 
 Report summaries describe approved comparisons, rankings, ranges, or time
 patterns. ML summaries describe reliability and important drivers without
@@ -706,9 +730,11 @@ communication uses versioned HTTP and Kafka contracts.
 - Flyway owns relational migrations in the dedicated `kozmik_lahmacun`
   application schema; Hibernate validates mappings and does not generate or
   mutate the schema at runtime.
-- LLM inputs are allowlisted and size-bounded. Source datasets, result
-  previews, direct identifiers, credentials and object paths are excluded from
-  result-summary prompts.
+- LLM inputs are purpose-specific and allowlisted. Source datasets,
+  credentials and object paths are excluded from result-summary prompts. Final
+  calculated result rows are included only when the complete
+  result contains at most 100 rows; larger results include their authoritative
+  count and non-row result information instead.
 - Failure records store safe codes, retryability, a sanitized technical reason,
   and a management-readable explanation.
 - Deletion is ownership-aware. Execution deletion removes analytical artifacts
@@ -1013,11 +1039,12 @@ On macOS with iTerm2, the complete clean path is:
 `seed-demo-data.sh`:
 
 1. verifies the running platform;
-2. generates deterministic 50,000-row Sales and 1,000,000-row Telecom CDR
-   datasets;
-3. uploads Sales to `raw/incoming`, triggering MinIO `ObjectCreated` ingestion;
+2. generates deterministic 50,000-row Sales, 100,000-row Payment Transactions,
+   and 1,000,000-row Telecom CDR datasets in three parallel writer processes;
+3. uploads Sales and Payment Transactions to `raw/incoming`, triggering MinIO
+   `ObjectCreated` ingestion for both files;
 4. publishes CDR as bounded chunks to the generic `ingestion.records.v1`
-   stream;
+   stream while the two MinIO-triggered file ingestions are active;
 5. waits for authoritative Java-owned ingestion state;
 6. verifies the final governed row counts and artifacts.
 
@@ -1191,8 +1218,9 @@ Run deterministic demo acceptance:
 ./scripts/demo-acceptance.sh
 ```
 
-This additionally verifies generation of the exact one-million-row CDR and
-fifty-thousand-row Sales datasets.
+This additionally verifies generation of the exact one-million-row CDR,
+fifty-thousand-row Sales, and one-hundred-thousand-row Payment Transactions
+datasets.
 
 ## Current boundaries and limitations
 
@@ -1269,7 +1297,7 @@ Permission and commercial-license requests: emre@gulay.io
 - [LLM provider and classification](docs/llm-provider-and-classification.md)
 - [Trusted report execution](docs/trusted-report-execution.md)
 - [ML planning and execution](docs/ml-planning-and-execution.md)
-- [Privacy-safe result explanation](docs/result-summary-pipeline.md)
+- [Result-summary contract and privacy boundary](docs/result-summary-pipeline.md)
 - [MinIO ingestion](docs/minio-ingestion.md)
 - [Streaming ingestion](docs/streaming-ingestion.md)
 - [Chat streaming](docs/chat-streaming.md)

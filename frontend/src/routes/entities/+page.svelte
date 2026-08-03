@@ -146,7 +146,7 @@
   >
     {#each entities as entity}
       <a href={`/entities/${entity.id}`} class="block h-full no-underline">
-        <Card.Root class="h-full transition-colors hover:bg-muted/50">
+        <Card.Root class="flex h-full flex-col transition-colors hover:bg-muted/50">
           <Card.Header>
             <div class="flex items-start justify-between gap-4">
               <div class="flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
@@ -157,7 +157,7 @@
             <Card.Title class="mt-4">{entity.name}</Card.Title>
             <Card.Description>{entity.description}</Card.Description>
           </Card.Header>
-          <Card.Content class="grid gap-4 text-sm">
+          <Card.Content class="grid flex-1 content-start gap-4 text-sm">
             <div>
               <p class="text-muted-foreground">{$t('importStatus')}</p>
               <p class="font-medium">
@@ -175,7 +175,7 @@
               </p>
             </div>
           </Card.Content>
-          <Card.Footer>
+          <Card.Footer class="mt-auto">
             <ArrowRight class="ml-auto size-4 text-muted-foreground" aria-hidden="true" />
           </Card.Footer>
         </Card.Root>

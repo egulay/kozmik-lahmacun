@@ -13,12 +13,16 @@ set +a
 
 readonly cdr_entity_id="22222222-2222-4222-8222-222222222222"
 readonly sales_entity_id="11111111-1111-4111-8111-111111111111"
+readonly payment_entity_id="33333333-3333-4333-8333-333333333333"
 readonly import_date="20260728"
 readonly generated_directory="${REPOSITORY_ROOT}/demo/generated"
 readonly cdr_source="${generated_directory}/cdr.csv"
 readonly sales_source="${generated_directory}/sales_${sales_entity_id}_${import_date}.csv"
+readonly payment_source="${generated_directory}/payment_transactions_${payment_entity_id}_${import_date}.csv"
 sales_object="$(basename "${sales_source}")"
 readonly sales_object
+payment_object="$(basename "${payment_source}")"
+readonly payment_object
 readonly executor_python="${REPOSITORY_ROOT}/executor/.venv/bin/python"
 
 echo "Verifying the running platform before data seeding..."
@@ -39,11 +43,12 @@ then
   exit 1
 fi
 
-echo "Generating deterministic CDR and sales CSV datasets..."
+echo "Generating deterministic CDR, sales, and payment transaction CSV datasets..."
 python3 "${REPOSITORY_ROOT}/demo/generate_data.py" \
   --output "${generated_directory}" \
   --cdr-rows 1000000 \
-  --sales-rows 50000
+  --sales-rows 50000 \
+  --payment-rows 100000
 
 completed_import_exists() {
   local object_name="$1"
@@ -85,6 +90,7 @@ upload_if_needed() {
 }
 
 upload_if_needed "${sales_source}" "${sales_object}"
+upload_if_needed "${payment_source}" "${payment_object}"
 
 wait_for_import() {
   local object_name="$1"
@@ -117,9 +123,6 @@ wait_for_import() {
   exit 1
 }
 
-echo "Waiting for Sales MinIO ObjectCreated ingestion..."
-wait_for_import "${sales_object}"
-
 if [[ ! -x "${executor_python}" ]]; then
   echo "Python executor environment is missing. Run ./scripts/start-all.sh first." >&2
   exit 1
@@ -149,6 +152,14 @@ else
     exit 1
   fi
 fi
+
+# Both file-ingestion events are already active while the CDR chunks are
+# published. The executor's configured Spark concurrency limit remains the
+# authoritative resource boundary.
+echo "Waiting for Sales MinIO ObjectCreated ingestion..."
+wait_for_import "${sales_object}"
+echo "Waiting for Payment Transactions MinIO ObjectCreated ingestion..."
+wait_for_import "${payment_object}"
 
 echo "Waiting for the governed CDR Kafka stream to reach 1,000,000 rows..."
 cdr_deadline=$((SECONDS + 1800))
@@ -183,5 +194,5 @@ compose exec -T postgres psql \
   --dbname "${POSTGRES_DB}" \
   --command "SELECT id, source_id, status, cumulative_rows, last_partition, last_offset FROM kozmik_lahmacun.ingestion_stream ORDER BY started_at"
 
-echo "Demo data is ready: 1,000,000 CDR rows and 50,000 sales rows."
+echo "Demo data is ready: 1,000,000 CDR rows, 50,000 sales rows, and 100,000 payment transaction rows."
 "${REPOSITORY_ROOT}/scripts/full-demo-smoke.sh" --require-demo-data

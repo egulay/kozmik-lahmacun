@@ -1,5 +1,8 @@
 import importlib.util
+import csv
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -21,15 +24,71 @@ def test_demo_generators_are_deterministic_and_contract_shaped(tmp_path):
     second = tmp_path / "second"
     generator.write_cdr(first / "cdr.csv", rows=25)
     generator.write_sales(first / "sales.csv", rows=25)
+    generator.write_payments(first / "payments.csv", rows=250)
     generator.write_cdr(second / "cdr.csv", rows=25)
     generator.write_sales(second / "sales.csv", rows=25)
+    generator.write_payments(second / "payments.csv", rows=250)
     assert (first / "cdr.csv").read_bytes() == (second / "cdr.csv").read_bytes()
     assert (first / "sales.csv").read_bytes() == (second / "sales.csv").read_bytes()
+    assert (first / "payments.csv").read_bytes() == (second / "payments.csv").read_bytes()
     assert generator.count_data_rows(first / "cdr.csv") == 25
     assert generator.count_data_rows(first / "sales.csv") == 25
+    assert generator.count_data_rows(first / "payments.csv") == 250
     assert tuple((first / "cdr.csv").read_text().splitlines()[0].split(",")) == (
         generator.CDR_COLUMNS
     )
+    assert tuple((first / "payments.csv").read_text().splitlines()[0].split(",")) == (
+        generator.PAYMENT_COLUMNS
+    )
+
+
+def test_payment_demo_contains_meaningful_supervised_fraud_signals(tmp_path):
+    generator = load_generator()
+    target = tmp_path / "payments.csv"
+    generator.write_payments(target, rows=10_000)
+
+    with target.open(encoding="utf-8") as stream:
+        records = list(csv.DictReader(stream))
+    fraud = [record for record in records if record["is_fraud"] == "true"]
+    legitimate = [record for record in records if record["is_fraud"] == "false"]
+
+    assert 100 <= len(fraud) <= 500
+    assert {record["channel"] for record in records} == {"pos", "online", "atm", "mobile"}
+    assert "" in {record["device_id"] for record in records}
+    assert len({record["currency"] for record in records}) >= 4
+    units_per_try = {"TRY": 1.0, "EUR": 0.029, "GBP": 0.025,
+                     "USD": 0.031, "AED": 0.114}
+    assert sum(
+        float(record["amount"]) / units_per_try[record["currency"]] for record in fraud
+    ) / len(fraud) > (
+        sum(float(record["amount"]) / units_per_try[record["currency"]]
+            for record in legitimate) / len(legitimate)
+    ) * 2
+    assert sum(record["device_id"].startswith("DEV-NEW-") for record in fraud) > len(fraud) / 2
+
+
+def test_parallel_cli_generation_matches_sequential_output(tmp_path):
+    script = ROOT / "demo" / "generate_data.py"
+    sequential = tmp_path / "sequential"
+    parallel = tmp_path / "parallel"
+    common = ["--cdr-rows", "250", "--sales-rows", "250", "--payment-rows", "250"]
+
+    subprocess.run(
+        [sys.executable, str(script), "--output", str(sequential), *common,
+         "--workers", "1"],
+        check=True,
+    )
+    subprocess.run(
+        [sys.executable, str(script), "--output", str(parallel), *common,
+         "--workers", "3"],
+        check=True,
+    )
+
+    assert {
+        path.name: path.read_bytes() for path in sequential.glob("*.csv")
+    } == {
+        path.name: path.read_bytes() for path in parallel.glob("*.csv")
+    }
 
 
 def test_demo_scenarios_are_versioned_and_role_separated():

@@ -6,10 +6,12 @@ from __future__ import annotations
 import argparse
 import csv
 import random
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 SALES_ENTITY_ID = "11111111-1111-4111-8111-111111111111"
+PAYMENT_ENTITY_ID = "33333333-3333-4333-8333-333333333333"
 CDR_COLUMNS = (
     "cdr_id", "event_time", "origin_region", "destination_region",
     "duration_seconds", "call_type", "roaming", "charge_amount", "currency_code",
@@ -17,6 +19,11 @@ CDR_COLUMNS = (
 SALES_COLUMNS = (
     "sale_id", "sale_date", "region", "channel", "product_category",
     "quantity", "unit_price", "discount_rate", "net_amount",
+)
+PAYMENT_COLUMNS = (
+    "transaction_id", "account_id", "amount", "currency", "merchant_id",
+    "merchant_category", "channel", "country", "device_id", "created_at",
+    "is_fraud",
 )
 
 
@@ -72,6 +79,137 @@ def write_sales(path: Path, rows: int = 50_000, seed: int = 84) -> None:
             ))
 
 
+def write_payments(path: Path, rows: int = 100_000, seed: int = 126) -> None:
+    """Write deterministic payment history with learnable fraud signals.
+
+    `is_fraud` is a synthetic historical outcome for supervised demo models. Its
+    value is correlated with realistic risk signals rather than assigned as
+    independent random noise.
+    """
+    randomizer = random.Random(seed)
+    countries = ("TR", "DE", "GB", "US", "NL", "AE")
+    currencies = {"TR": "TRY", "DE": "EUR", "GB": "GBP", "US": "USD",
+                  "NL": "EUR", "AE": "AED"}
+    local_units_per_try = {
+        "TRY": 1.0, "EUR": 0.029, "GBP": 0.025, "USD": 0.031, "AED": 0.114,
+    }
+    categories = (
+        "GROCERY", "RESTAURANT", "FUEL", "PHARMACY", "UTILITY",
+        "ELECTRONICS", "TRAVEL", "JEWELRY", "GAMBLING", "DIGITAL_ASSET",
+    )
+    category_weights = (22, 18, 13, 9, 10, 10, 7, 4, 4, 3)
+    amount_multipliers = {
+        "GROCERY": 0.65, "RESTAURANT": 0.55, "FUEL": 0.7,
+        "PHARMACY": 0.6, "UTILITY": 0.9, "ELECTRONICS": 2.4,
+        "TRAVEL": 3.2, "JEWELRY": 4.0, "GAMBLING": 1.5,
+        "DIGITAL_ASSET": 2.8,
+    }
+    risky_categories = {"JEWELRY", "GAMBLING", "DIGITAL_ASSET"}
+    channels = ("pos", "online", "atm", "mobile")
+    account_count = max(200, min(12_000, rows // 8))
+    merchant_count = max(80, min(2_000, rows // 35))
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    accounts = []
+    for index in range(account_count):
+        home_country = randomizer.choices(countries, weights=(72, 8, 6, 6, 5, 3))[0]
+        typical_amount_try = randomizer.lognormvariate(6.35, 0.55)
+        devices = (
+            f"DEV-{index + 1:06d}-A",
+            f"DEV-{index + 1:06d}-B",
+        )
+        accounts.append((home_country, typical_amount_try, devices))
+
+    merchants = []
+    for index in range(merchant_count):
+        category = randomizer.choices(categories, weights=category_weights)[0]
+        country = randomizer.choices(countries, weights=(62, 9, 8, 8, 7, 6))[0]
+        merchants.append((category, country, f"MER-{index + 1:06d}"))
+    merchants_by_category = {
+        category: [merchant for merchant in merchants if merchant[0] == category]
+        for category in categories
+    }
+
+    last_transaction: dict[int, datetime] = {}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(PAYMENT_COLUMNS)
+        for index in range(rows):
+            account_index = randomizer.randrange(account_count)
+            home_country, typical_amount_try, known_devices = accounts[account_index]
+            merchant_category, merchant_country, merchant_id = merchants[
+                randomizer.randrange(merchant_count)
+            ]
+            fraud = randomizer.random() < 0.018
+
+            if fraud:
+                merchant_category = randomizer.choices(
+                    categories, weights=(2, 2, 1, 1, 1, 8, 8, 18, 28, 31),
+                )[0]
+                category_merchants = merchants_by_category[merchant_category]
+                if category_merchants:
+                    _, merchant_country, merchant_id = randomizer.choice(category_merchants)
+                country = randomizer.choice(tuple(
+                    item for item in countries if item != home_country
+                )) if randomizer.random() < 0.78 else home_country
+                channel = randomizer.choices(
+                    channels, weights=(5, 48, 8, 39),
+                )[0]
+                device_id = (
+                    "" if randomizer.random() < 0.18
+                    else f"DEV-NEW-{index + 1:09d}"
+                )
+                amount_try = typical_amount_try * randomizer.uniform(4.5, 13.0)
+                hour = randomizer.choice((0, 1, 2, 3, 4, 23))
+            else:
+                country = home_country if randomizer.random() < 0.94 else merchant_country
+                channel = randomizer.choices(
+                    channels, weights=(48, 25, 7, 20),
+                )[0]
+                device_id = "" if randomizer.random() < 0.025 else randomizer.choices(
+                    known_devices, weights=(92, 8),
+                )[0]
+                amount_try = typical_amount_try * amount_multipliers[merchant_category]
+                amount_try *= randomizer.lognormvariate(0, 0.38)
+                hour = int(min(23, max(0, randomizer.normalvariate(14, 4.2))))
+
+            day = randomizer.randrange(181)
+            minute = randomizer.randrange(60)
+            second = randomizer.randrange(60)
+            created_at = start + timedelta(
+                days=day, hours=hour, minutes=minute, seconds=second,
+            )
+            previous = last_transaction.get(account_index)
+            if fraud and previous is not None and randomizer.random() < 0.42:
+                created_at = previous + timedelta(seconds=randomizer.randrange(15, 180))
+            last_transaction[account_index] = created_at
+
+            # A few naturally risky-looking transactions remain legitimate, and
+            # a few labelled frauds are less obvious, avoiding a perfectly
+            # separable toy dataset.
+            if not fraud and merchant_category in risky_categories \
+                    and country != home_country and amount_try > typical_amount_try * 3:
+                fraud = randomizer.random() < 0.12
+
+            currency = currencies[country]
+            amount = amount_try * local_units_per_try[currency]
+
+            writer.writerow((
+                f"TXN-{index + 1:09d}",
+                f"ACC-{account_index + 1:07d}",
+                f"{max(0.50, amount):.2f}",
+                currency,
+                merchant_id,
+                merchant_category,
+                channel,
+                country,
+                device_id,
+                created_at.isoformat().replace("+00:00", "Z"),
+                str(fraud).lower(),
+            ))
+
+
 def count_data_rows(path: Path) -> int:
     with path.open(encoding="utf-8") as stream:
         return sum(1 for _ in stream) - 1
@@ -82,17 +220,40 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path("demo/generated"))
     parser.add_argument("--cdr-rows", type=int, default=1_000_000)
     parser.add_argument("--sales-rows", type=int, default=50_000)
+    parser.add_argument("--payment-rows", type=int, default=100_000)
+    parser.add_argument(
+        "--workers", type=int, default=3,
+        help="parallel dataset writers (default: 3)",
+    )
     arguments = parser.parse_args()
-    if arguments.cdr_rows < 1 or arguments.sales_rows < 1:
+    if arguments.cdr_rows < 1 or arguments.sales_rows < 1 or arguments.payment_rows < 1:
         parser.error("row counts must be positive")
+    if arguments.workers < 1 or arguments.workers > 3:
+        parser.error("workers must be between 1 and 3")
     cdr = arguments.output / "cdr.csv"
     sales = arguments.output / (
         f"sales_{SALES_ENTITY_ID}_20260728.csv"
     )
-    write_cdr(cdr, arguments.cdr_rows)
-    write_sales(sales, arguments.sales_rows)
-    print(f"{cdr}: {count_data_rows(cdr)} rows")
-    print(f"{sales}: {count_data_rows(sales)} rows")
+    payments = arguments.output / (
+        f"payment_transactions_{PAYMENT_ENTITY_ID}_20260728.csv"
+    )
+    jobs = (
+        (write_cdr, cdr, arguments.cdr_rows),
+        (write_sales, sales, arguments.sales_rows),
+        (write_payments, payments, arguments.payment_rows),
+    )
+    if arguments.workers == 1:
+        for writer, path, rows in jobs:
+            writer(path, rows)
+    else:
+        with ProcessPoolExecutor(max_workers=arguments.workers) as executor:
+            futures = [executor.submit(writer, path, rows) for writer, path, rows in jobs]
+            # Resolve in declaration order for stable console output; generation
+            # itself runs concurrently and every failure is propagated.
+            for future in futures:
+                future.result()
+    for _, path, rows in jobs:
+        print(f"{path}: {rows} rows")
 
 
 if __name__ == "__main__":
