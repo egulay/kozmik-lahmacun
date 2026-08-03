@@ -9,8 +9,6 @@
     LibraryBig,
     LogOut,
     MessageSquareText,
-    Moon,
-    Sun,
     Users
   } from '@lucide/svelte';
   import type { Snippet } from 'svelte';
@@ -30,6 +28,7 @@
   import * as Sidebar from './ui/sidebar/index.js';
   import WorkspaceTabs from './WorkspaceTabs.svelte';
   import ExecutionTypeIcon from './ExecutionTypeIcon.svelte';
+  import { subscribeExecutionEvents } from '$lib/execution-events';
 
   type ServiceHealth = {
     service: 'backend' | 'executor' | 'llm' | 'kafka';
@@ -39,7 +38,6 @@
   };
 
   let { children }: { children: Snippet } = $props();
-  let dark = $state(false);
   let recentThreads = $state<ChatThread[]>([]);
   let chatTreePage = $state(0);
   let chatTreeLast = $state(false);
@@ -62,7 +60,7 @@
     kafka: serviceHealth('kafka', 'UNKNOWN')
   });
   let healthTimer: ReturnType<typeof setInterval> | undefined;
-  let executionTimer: ReturnType<typeof setInterval> | undefined;
+  let unsubscribeExecutionEvents: (() => void) | undefined;
   let systemTheme: MediaQueryList | undefined;
   let passwordDialogOpen = $state(false);
   let passwordEmailSending = $state(false);
@@ -80,13 +78,9 @@
   ];
 
 
-  $effect(() => {
-    dark = document.documentElement.classList.contains('dark');
-  });
-
   onMount(() => {
     systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
-    applyPreferredTheme();
+    applySystemTheme(systemTheme);
     systemTheme.addEventListener('change', applySystemTheme);
 
     void (async () => {
@@ -98,14 +92,19 @@
       await refreshServiceStatuses();
     })();
     healthTimer = setInterval(refreshServiceStatuses, 10_000);
-    executionTimer = setInterval(refreshTrees, 5_000);
+    unsubscribeExecutionEvents = subscribeExecutionEvents((_event, name) => {
+      if (name !== 'heartbeat') {
+        void loadExecutionTree(true);
+        void loadResultTree(true);
+      }
+    });
     window.addEventListener('focus', refreshTrees);
     window.addEventListener('kozmik:execution-deleted', onExecutionDeleted);
     window.addEventListener('kozmik:chat-thread-deleted', onChatThreadDeleted);
     window.addEventListener('kozmik:chat-thread-renamed', onChatThreadRenamed);
     return () => {
       if (healthTimer) clearInterval(healthTimer);
-      if (executionTimer) clearInterval(executionTimer);
+      unsubscribeExecutionEvents?.();
       window.removeEventListener('focus', refreshTrees);
       window.removeEventListener('kozmik:execution-deleted', onExecutionDeleted);
       window.removeEventListener('kozmik:chat-thread-deleted', onChatThreadDeleted);
@@ -114,15 +113,8 @@
     };
   });
 
-  function applyPreferredTheme() {
-    localStorage.removeItem('kozmik-theme-preference');
-    dark = Boolean(systemTheme?.matches);
-    document.documentElement.classList.toggle('dark', dark);
-  }
-
-  function applySystemTheme(event: MediaQueryListEvent) {
-    dark = event.matches;
-    document.documentElement.classList.toggle('dark', dark);
+  function applySystemTheme(event: MediaQueryList | MediaQueryListEvent) {
+    document.documentElement.classList.toggle('dark', event.matches);
   }
 
   async function loadChatTree(reset = false) {
@@ -321,11 +313,6 @@
 
   function liveConnectionActive() {
     return available(serviceStatus('kafka'));
-  }
-
-  function toggleTheme() {
-    dark = !dark;
-    document.documentElement.classList.toggle('dark', dark);
   }
 
   function active(href: string) {
@@ -668,9 +655,6 @@
             <DropdownMenu.Item onclick={() => setLocale('en')}>English</DropdownMenu.Item>
           </DropdownMenu.Content>
         </DropdownMenu.Root>
-        <Button variant="ghost" size="icon" aria-label={$t('theme')} onclick={toggleTheme}>
-          {#if dark}<Sun size={18} />{:else}<Moon size={18} />{/if}
-        </Button>
       </div>
     </header>
     <div class="pdf-navigation-tabs w-full min-w-0">

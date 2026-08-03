@@ -6,7 +6,7 @@
   import { api } from '$lib/api';
   import { locale, t } from '$lib/i18n';
   import type { EntitySummary, Execution } from '$lib/types';
-  import { DurableEventStream } from '$lib/sse';
+  import { subscribeExecutionEvents } from '$lib/execution-events';
   import { formatDate, formatDuration } from '$lib/utils';
   import { Button } from '$lib/components/ui/button/index.js';
   import * as Card from '$lib/components/ui/card/index.js';
@@ -38,10 +38,8 @@
   let localizedEntity = $state<EntitySummary | null>(initialView?.localizedEntity ?? null);
   let loading = $state(!initialView);
   let error = $state('');
-  let connected = $state(false);
   let cancelling = $state(false);
-  let stream: DurableEventStream | undefined;
-  let refreshTimer: ReturnType<typeof setInterval> | undefined;
+  let unsubscribeExecutionEvents: (() => void) | undefined;
   let durationTimer: ReturnType<typeof setInterval> | undefined;
   let durationNow = $state(Date.now());
   let cancelDialogOpen = $state(false);
@@ -60,11 +58,6 @@
       return false;
     }
     execution = loadedExecution;
-    if (isTerminal(loadedExecution.status)) {
-      stream?.close();
-      stream = undefined;
-      connected = false;
-    }
     return true;
   }
 
@@ -73,24 +66,28 @@
     const selectedLocale = $locale;
     if (!executionId) return;
 
-    stream?.close();
-    stream = undefined;
-    connected = false;
-    void load(executionId, selectedLocale).then(() => {
-      if ($page.params.id === executionId && $locale === selectedLocale) {
-        connect(executionId);
-      }
-    });
+    void load(executionId, selectedLocale);
   });
 
   onMount(() => {
-    refreshTimer = setInterval(refresh, 2_000);
+    unsubscribeExecutionEvents = subscribeExecutionEvents((event, name) => {
+      if (name === 'heartbeat') return;
+      if (name === 'reconnect') {
+        void refresh();
+        return;
+      }
+      try {
+        const payload = JSON.parse(event.data) as { executionId?: unknown };
+        if (payload.executionId === $page.params.id) void refresh();
+      } catch {
+        // Authoritative reload remains available after the next valid event.
+      }
+    });
     durationTimer = setInterval(() => {
       durationNow = Date.now();
     }, 1_000);
     return () => {
-      stream?.close();
-      if (refreshTimer) clearInterval(refreshTimer);
+      unsubscribeExecutionEvents?.();
       if (durationTimer) clearInterval(durationTimer);
     };
   });
@@ -129,22 +126,6 @@
     }
   }
 
-  function connect(executionId = execution?.id) {
-    if (
-      !executionId
-      || execution?.id !== executionId
-      || isTerminal(execution.status)
-    ) return;
-    stream = new DurableEventStream(`/api/executions/${executionId}/stream`, {
-      onConnectionChange: (value) => (connected = value),
-      onReconnect: () => load(executionId),
-      onEvent: async (_event, name) => {
-        if (name !== 'heartbeat') await load(executionId);
-      }
-    });
-    stream.connect();
-  }
-
   async function refresh() {
     if (!execution || isTerminal(execution.status)) {
       return;
@@ -154,9 +135,7 @@
       const loadedExecution = await api.execution(executionId);
       if ($page.params.id !== executionId) return;
       applyExecution(loadedExecution);
-    } catch {
-      connected = false;
-    }
+    } catch { /* Keep the last durable state until reconnect. */ }
   }
 
   async function cancel() {

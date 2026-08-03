@@ -121,7 +121,8 @@ public class ExecutionEventConsumer {
         processed.save(ProcessedExecutionEventModel.builder()
                 .eventId(event.eventId()).eventType("STATUS").execution(execution)
                 .processedAt(Instant.now(clock)).build());
-        afterCommit(execution.getId(), event.eventId(), status == ExecutionStatus.FAILED
+        afterCommit(execution.getId(), execution.getOwner().getKeycloakUserId(),
+                event.eventId(), status == ExecutionStatus.FAILED
                 ? "execution-failed" : "execution-status-changed", event);
     }
 
@@ -244,7 +245,8 @@ public class ExecutionEventConsumer {
         }
         processed.save(ProcessedExecutionEventModel.builder().eventId(event.eventId())
                 .eventType("RESULT").execution(execution).processedAt(Instant.now(clock)).build());
-        afterCommit(execution.getId(), event.eventId(), "execution-result-ready", event);
+        afterCommit(execution.getId(), execution.getOwner().getKeycloakUserId(),
+                event.eventId(), "execution-result-ready", event);
     }
 
     @Transactional
@@ -306,11 +308,12 @@ public class ExecutionEventConsumer {
                 || value.chars().anyMatch(character -> Character.isISOControl(character));
     }
 
-    private void afterCommit(UUID executionId, UUID eventId, String type, Object event) {
+    private void afterCommit(
+            UUID executionId, String userSubject, UUID eventId, String type, Object event) {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                hub.publish(executionId, eventId, type, event);
+                hub.publish(executionId, userSubject, eventId, type, event);
             }
         });
     }

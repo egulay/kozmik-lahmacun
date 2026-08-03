@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 import sqlite3
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid5
@@ -13,6 +12,7 @@ from pydantic import ValidationError
 from pyspark.sql import functions as spark_fn, types as spark_types
 from kozmik_executor.spark_runtime import run_spark_operation
 from kozmik_executor.spark_session import build_spark_session
+from kozmik_executor.parquet_artifacts import write_parquet_artifact
 
 from kozmik_executor.ingestion.models import (
     StreamIngestionChunk,
@@ -110,11 +110,7 @@ class SparkStreamChunkIngester:
         rows = governed.count()
         dataset_prefix = f"entities/{schema.entity_id}/streams/{chunk.stream_id}/dataset"
         object_key = f"{dataset_prefix}/part-{chunk.sequence:012d}-{chunk.chunk_id}.parquet"
-        with tempfile.TemporaryDirectory(prefix="kozmik-stream-chunk-") as directory:
-            output = Path(directory) / "parquet"
-            governed.coalesce(1).write.mode("overwrite").parquet(str(output))
-            part = next(output.glob("part-*.parquet"))
-            self.minio.fput_object("refined", object_key, str(part))
+        write_parquet_artifact(governed, self.minio, "refined", object_key)
         return rows, object_key
 
 

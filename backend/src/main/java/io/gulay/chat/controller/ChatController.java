@@ -13,7 +13,6 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 
-import java.io.IOException;
 import java.net.URI;
 import java.util.Objects;
 import java.util.UUID;
@@ -111,20 +110,15 @@ public class ChatController {
             @PathVariable UUID threadId,
             @RequestParam UUID assistantMessageId,
             @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId,
-            @AuthenticationPrincipal OidcUser user) throws IOException {
+            @AuthenticationPrincipal OidcUser user) {
         val message = chatService.terminalOrCurrent(
                 threadId, assistantMessageId, user.getSubject());
         if (message.getStatus() == ChatMessageStatus.COMPLETED
                 || message.getStatus() == ChatMessageStatus.FAILED) {
-            val emitter = new SseEmitter(1_000L);
             val name = message.getStatus() == ChatMessageStatus.COMPLETED
                     ? "message-completed" : "message-failed";
-            emitter.send(SseEmitter.event()
-                    .id(message.getId() + ":terminal")
-                    .name(name)
-                    .data(chatService.response(message)));
-            emitter.complete();
-            return emitter;
+            return hub.terminal(assistantMessageId, message.getId() + ":terminal",
+                    name, chatService.response(message));
         }
         return hub.subscribe(assistantMessageId, lastEventId);
     }

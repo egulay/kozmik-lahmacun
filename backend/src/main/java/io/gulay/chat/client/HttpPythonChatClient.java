@@ -4,30 +4,19 @@ import lombok.val;
 
 import tools.jackson.databind.ObjectMapper;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.function.Consumer;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import io.gulay.executor.client.PythonExecutorTransport;
 
 @Component
 @RequiredArgsConstructor
 public class HttpPythonChatClient implements PythonChatClient {
     private final ObjectMapper objectMapper;
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .version(HttpClient.Version.HTTP_1_1)
-            .connectTimeout(Duration.ofSeconds(5))
-            .build();
-
-    @Value("${kozmik.python.base-url:http://localhost:8000}")
-    private String baseUrl;
-    @Value("${kozmik.security.internal-api-key:}")
-    private String internalApiKey;
+    private final PythonExecutorTransport transport;
     @Value("${kozmik.python.chat-stream-timeout-seconds:240}")
     private long chatStreamTimeoutSeconds;
     @Value("${kozmik.python.classification-timeout-seconds:240}")
@@ -38,16 +27,8 @@ public class HttpPythonChatClient implements PythonChatClient {
                        Consumer<PythonChatContracts.StreamEvent> eventConsumer) {
         try {
             val body = objectMapper.writeValueAsString(request);
-            val httpRequest = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + "/internal/v1/chat/stream"))
-                    .header("Content-Type", "application/json")
-                    .header("Accept", "application/x-ndjson")
-                    .header("X-Internal-API-Key", internalApiKey)
-                    .header("X-Correlation-ID", request.correlationId())
-                    .timeout(Duration.ofSeconds(chatStreamTimeoutSeconds))
-                    .POST(HttpRequest.BodyPublishers.ofString(body))
-                    .build();
-            val response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofLines());
+            val response = transport.postJsonLines("/internal/v1/chat/stream", body,
+                    request.correlationId(), Duration.ofSeconds(chatStreamTimeoutSeconds));
             if (response.statusCode() != 200) {
                 throw new IllegalStateException("Python chat endpoint unavailable");
             }
@@ -56,9 +37,6 @@ public class HttpPythonChatClient implements PythonChatClient {
                         .map(this::parse)
                         .forEach(eventConsumer);
             }
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Python chat stream interrupted", exception);
         } catch (Exception exception) {
             throw new IllegalStateException("Python chat stream failed", exception);
         }
@@ -69,25 +47,13 @@ public class HttpPythonChatClient implements PythonChatClient {
             PythonChatContracts.ClassificationRequest request) {
         try {
             val body = objectMapper.writeValueAsString(request);
-            val httpRequest = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + "/internal/v1/chat/classify"))
-                    .header("Content-Type", "application/json")
-                    .header("Accept", "application/json")
-                    .header("X-Internal-API-Key", internalApiKey)
-                    .header("X-Correlation-ID", request.correlationId())
-                    .timeout(Duration.ofSeconds(classificationTimeoutSeconds))
-                    .POST(HttpRequest.BodyPublishers.ofString(body))
-                    .build();
-            val response = httpClient.send(
-                    httpRequest, HttpResponse.BodyHandlers.ofString());
+            val response = transport.postJson("/internal/v1/chat/classify", body,
+                    request.correlationId(), Duration.ofSeconds(classificationTimeoutSeconds));
             if (response.statusCode() != 200) {
                 throw new IllegalStateException("Python classification endpoint unavailable");
             }
             return objectMapper.readValue(
                     response.body(), PythonChatContracts.ClassificationResponse.class);
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Python classification interrupted", exception);
         } catch (Exception exception) {
             throw new IllegalStateException("Python classification failed", exception);
         }

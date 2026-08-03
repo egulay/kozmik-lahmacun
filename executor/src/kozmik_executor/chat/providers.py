@@ -115,6 +115,40 @@ class OpenAiCompatibleProvider:
         # reject non-default temperature values with HTTP 400.
         return {"temperature": 0} if self.name == "lm-studio" else {}
 
+    def _client(self, timeout_seconds: float | None = None) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout_seconds or self.config.timeout_seconds),
+            headers=self._headers(),
+            transport=self.transport,
+        )
+
+    async def _completion_content(
+        self, payload: dict, invalid_response_code: str,
+    ) -> str:
+        for attempt in range(self.config.max_retries + 1):
+            try:
+                async with self._client() as client:
+                    response = await client.post(
+                        f"{self.config.base_url.rstrip('/')}/chat/completions", json=payload)
+                    response.raise_for_status()
+                    content = response.json()["choices"][0]["message"]["content"]
+                    if not isinstance(content, str) or not content.strip():
+                        raise ValueError("provider returned empty text")
+                    return content.strip()
+            except (httpx.TimeoutException, httpx.NetworkError) as exception:
+                if attempt >= self.config.max_retries:
+                    raise ProviderError("LLM_PROVIDER_TIMEOUT", retryable=True) from exception
+                await asyncio.sleep(0.05 * (2**attempt))
+            except httpx.HTTPStatusError as exception:
+                status = exception.response.status_code
+                raise ProviderError(
+                    "LLM_PROVIDER_REQUEST_REJECTED",
+                    retryable=status == 429 or status >= 500,
+                ) from exception
+            except (ValueError, KeyError, IndexError, json.JSONDecodeError) as exception:
+                raise ProviderError(invalid_response_code) from exception
+        raise ProviderError("LLM_PROVIDER_UNAVAILABLE")
+
     async def stream(self, messages: list[dict[str, str]]) -> AsyncIterator[str]:
         payload = {
             "model": self.model,
@@ -125,10 +159,7 @@ class OpenAiCompatibleProvider:
         emitted = False
         for attempt in range(self.config.max_retries + 1):
             try:
-                timeout = httpx.Timeout(self.config.timeout_seconds)
-                async with httpx.AsyncClient(
-                    timeout=timeout, headers=self._headers(), transport=self.transport
-                ) as client:
+                async with self._client() as client:
                     async with client.stream(
                         "POST", f"{self.config.base_url.rstrip('/')}/chat/completions", json=payload
                     ) as response:
@@ -171,26 +202,11 @@ class OpenAiCompatibleProvider:
             "stream": False,
             **self._sampling_parameters(),
         }
-        for attempt in range(self.config.max_retries + 1):
-            try:
-                async with httpx.AsyncClient(
-                    timeout=httpx.Timeout(self.config.timeout_seconds),
-                    headers=self._headers(),
-                    transport=self.transport,
-                ) as client:
-                    response = await client.post(
-                        f"{self.config.base_url.rstrip('/')}/chat/completions", json=payload
-                    )
-                    response.raise_for_status()
-                    content = response.json()["choices"][0]["message"]["content"]
-                    return _parse_intent(content)
-            except (httpx.TimeoutException, httpx.NetworkError) as exception:
-                if attempt >= self.config.max_retries:
-                    raise ProviderError("LLM_PROVIDER_TIMEOUT", retryable=True) from exception
-                await asyncio.sleep(0.05 * (2**attempt))
-            except (httpx.HTTPStatusError, ValueError, KeyError, json.JSONDecodeError) as exception:
-                raise ProviderError("LLM_CLASSIFICATION_INVALID") from exception
-        raise ProviderError("LLM_PROVIDER_UNAVAILABLE")
+        content = await self._completion_content(payload, "LLM_CLASSIFICATION_INVALID")
+        try:
+            return _parse_intent(content)
+        except ValueError as exception:
+            raise ProviderError("LLM_CLASSIFICATION_INVALID") from exception
 
     async def complete_json(self, system_prompt: str, user_prompt: str) -> dict:
         payload = {
@@ -205,37 +221,12 @@ class OpenAiCompatibleProvider:
         if self.name != "lm-studio":
             payload["response_format"] = {"type": "json_object"}
         async with _STRUCTURED_REQUEST_SEMAPHORE:
-            for attempt in range(self.config.max_retries + 1):
-                try:
-                    async with httpx.AsyncClient(
-                        timeout=httpx.Timeout(self.config.timeout_seconds),
-                        headers=self._headers(),
-                        transport=self.transport,
-                    ) as client:
-                        response = await client.post(
-                            f"{self.config.base_url.rstrip('/')}/chat/completions", json=payload
-                        )
-                        response.raise_for_status()
-                        content = response.json()["choices"][0]["message"]["content"]
-                        return _parse_json_object(content)
-                except (httpx.TimeoutException, httpx.NetworkError) as exception:
-                    if attempt >= self.config.max_retries:
-                        raise ProviderError("LLM_PROVIDER_TIMEOUT", retryable=True) from exception
-                    await asyncio.sleep(0.05 * (2**attempt))
-                except httpx.HTTPStatusError as exception:
-                    status = exception.response.status_code
-                    logger.warning(
-                        "llm_structured_request_rejected provider=%s status=%s",
-                        self.name,
-                        status,
-                    )
-                    raise ProviderError(
-                        "LLM_PROVIDER_REQUEST_REJECTED",
-                        retryable=status == 429 or status >= 500,
-                    ) from exception
-                except (ValueError, KeyError, json.JSONDecodeError) as exception:
-                    raise ProviderError("LLM_STRUCTURED_RESPONSE_INVALID") from exception
-        raise ProviderError("LLM_PROVIDER_UNAVAILABLE")
+            content = await self._completion_content(
+                payload, "LLM_STRUCTURED_RESPONSE_INVALID")
+            try:
+                return _parse_json_object(content)
+            except ValueError as exception:
+                raise ProviderError("LLM_STRUCTURED_RESPONSE_INVALID") from exception
 
     async def complete_text(self, system_prompt: str, user_prompt: str) -> str:
         payload = {
@@ -247,34 +238,7 @@ class OpenAiCompatibleProvider:
             "stream": False,
             **self._sampling_parameters(),
         }
-        for attempt in range(self.config.max_retries + 1):
-            try:
-                async with httpx.AsyncClient(
-                    timeout=httpx.Timeout(self.config.timeout_seconds),
-                    headers=self._headers(),
-                    transport=self.transport,
-                ) as client:
-                    response = await client.post(
-                        f"{self.config.base_url.rstrip('/')}/chat/completions", json=payload
-                    )
-                    response.raise_for_status()
-                    content = response.json()["choices"][0]["message"]["content"]
-                    if not isinstance(content, str) or not content.strip():
-                        raise ValueError("provider returned empty text")
-                    return content.strip()
-            except (httpx.TimeoutException, httpx.NetworkError) as exception:
-                if attempt >= self.config.max_retries:
-                    raise ProviderError("LLM_PROVIDER_TIMEOUT", retryable=True) from exception
-                await asyncio.sleep(0.05 * (2**attempt))
-            except httpx.HTTPStatusError as exception:
-                status = exception.response.status_code
-                raise ProviderError(
-                    "LLM_PROVIDER_REQUEST_REJECTED",
-                    retryable=status == 429 or status >= 500,
-                ) from exception
-            except (ValueError, KeyError, IndexError, json.JSONDecodeError) as exception:
-                raise ProviderError("LLM_PROVIDER_INVALID_RESPONSE") from exception
-        raise ProviderError("LLM_PROVIDER_UNAVAILABLE")
+        return await self._completion_content(payload, "LLM_PROVIDER_INVALID_RESPONSE")
 
     async def health(self) -> bool:
         try:
@@ -285,11 +249,7 @@ class OpenAiCompatibleProvider:
 
     async def ensure_ready(self) -> None:
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(min(self.config.timeout_seconds, 5)),
-                headers=self._headers(),
-                transport=self.transport,
-            ) as client:
+            async with self._client(min(self.config.timeout_seconds, 5)) as client:
                 response = await client.get(f"{self.config.base_url.rstrip('/')}/models")
                 response.raise_for_status()
                 payload = response.json()

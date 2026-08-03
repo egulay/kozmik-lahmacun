@@ -2,11 +2,9 @@ import asyncio
 import math
 import os
 import re
-import tempfile
 from collections.abc import Callable
 from decimal import Decimal
 from datetime import date, datetime
-from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid5
 
@@ -24,6 +22,7 @@ from kozmik_executor.planning.models import (
     TemporalGranularity,
 )
 from kozmik_executor.spark_runtime import run_spark_operation
+from kozmik_executor.parquet_artifacts import write_parquet_artifact
 from kozmik_executor.spark_session import build_spark_session
 
 ARTIFACT_NAMESPACE = UUID("19af38da-8525-4e7f-986f-9cbb4fcc9ab8")
@@ -192,12 +191,7 @@ class SparkReportExecutor:
                    for field in transformed.schema.fields]
         artifact_id = uuid5(ARTIFACT_NAMESPACE, str(execution_id))
         object_key = f"executions/{execution_id}/{artifact_id}.parquet"
-        with tempfile.TemporaryDirectory(prefix="kozmik-result-") as directory:
-            output = Path(directory) / "parquet"
-            transformed.coalesce(1).write.mode("overwrite").parquet(str(output))
-            part = next(output.glob("part-*.parquet"))
-            self.minio.fput_object("results", object_key, str(part))
-            size = part.stat().st_size
+        size = write_parquet_artifact(transformed, self.minio, "results", object_key)
         return {
             "rowCount": row_count,
             "preview": {"columns": columns, "rows": preview_rows, "limit": preview_limit,

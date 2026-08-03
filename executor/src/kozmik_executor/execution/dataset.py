@@ -13,6 +13,7 @@ from pydantic import Field, ValidationError, model_validator
 
 from kozmik_executor.chat.models import ContractModel
 from kozmik_executor.execution.models import ExecutionCommand
+from kozmik_executor.control_plane import ControlPlaneClient
 
 
 class GovernedDataset(ContractModel):
@@ -67,9 +68,7 @@ class GovernedDatasetResolver:
         minio: Minio | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        self.base_url = os.getenv("JAVA_BASE_URL", "http://localhost:8080")
-        self.api_key = os.getenv("INTERNAL_API_KEY", "")
-        self.transport = transport
+        self.control_plane = ControlPlaneClient(transport=transport)
         self.minio = minio or Minio(
             os.getenv("MINIO_ENDPOINT", "localhost:9000"),
             access_key=os.getenv("MINIO_ACCESS_KEY", ""),
@@ -79,14 +78,8 @@ class GovernedDatasetResolver:
 
     async def metadata(self, command: ExecutionCommand) -> GovernedDataset:
         try:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(10), transport=self.transport,
-            ) as client:
-                response = await client.get(
-                    f"{self.base_url.rstrip('/')}/internal/v1/executions/"
-                    f"{command.execution_id}/dataset",
-                    headers={"X-Internal-API-Key": self.api_key},
-                )
+            response = await self.control_plane.get(
+                f"/internal/v1/executions/{command.execution_id}/dataset")
             if response.status_code == 404:
                 raise DatasetResolutionError("GOVERNED_DATASET_NOT_FOUND")
             response.raise_for_status()

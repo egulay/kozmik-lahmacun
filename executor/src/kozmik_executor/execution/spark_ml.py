@@ -34,6 +34,7 @@ from pyspark.sql import functions as spark_fn
 from kozmik_executor.planning.models import MlOrder
 from kozmik_executor.execution.spark_report import FILTER_REGISTRY
 from kozmik_executor.spark_runtime import run_spark_operation
+from kozmik_executor.parquet_artifacts import write_parquet_artifact
 from kozmik_executor.spark_session import build_spark_session
 
 ML_NAMESPACE = UUID("8a859a44-9b33-49da-afbb-c6af731c9518")
@@ -164,18 +165,15 @@ class SparkMlExecutor:
         scenario_chart = self._what_if_analysis(order, model, test, predictions)
         artifact_id = uuid5(ML_NAMESPACE, f"{execution_id}:predictions")
         model_id = uuid5(ML_NAMESPACE, f"{execution_id}:model")
+        prediction_key = f"executions/{execution_id}/{artifact_id}.parquet"
+        prediction_size = write_parquet_artifact(
+            preview_frame, self.minio, "results", prediction_key)
         with tempfile.TemporaryDirectory(prefix="kozmik-ml-") as directory:
-            predictions_path = Path(directory) / "predictions"
-            preview_frame.coalesce(1).write.mode("overwrite").parquet(str(predictions_path))
-            prediction_part = next(predictions_path.glob("part-*.parquet"))
-            prediction_key = f"executions/{execution_id}/{artifact_id}.parquet"
-            self.minio.fput_object("results", prediction_key, str(prediction_part))
             model_path = Path(directory) / "model"
             model.write().overwrite().save(str(model_path))
             archive = shutil.make_archive(str(Path(directory) / "model"), "zip", model_path)
             model_key = f"executions/{execution_id}/{model_id}.zip"
             self.minio.fput_object("models", model_key, archive)
-            prediction_size = prediction_part.stat().st_size
             model_size = Path(archive).stat().st_size
         kpis = [{"code": name, "labelKey": f"result.metric.{name.lower()}",
                  "value": value, "unit": None} for name, value in metrics.items()]

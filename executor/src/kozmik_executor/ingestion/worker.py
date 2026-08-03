@@ -9,12 +9,13 @@ from pathlib import Path
 from urllib.parse import unquote_plus
 from uuid import UUID, uuid5
 
-import httpx
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from minio import Minio
 from pyspark.sql import functions as spark_fn, types as spark_types
 from kozmik_executor.spark_runtime import run_spark_operation
 from kozmik_executor.spark_session import build_spark_session
+from kozmik_executor.control_plane import ControlPlaneClient
+from kozmik_executor.parquet_artifacts import write_parquet_artifact
 
 from kozmik_executor.execution.worker import EventLedger
 from kozmik_executor.chat.providers import ProviderError
@@ -64,15 +65,11 @@ def parse_object_created(payload: bytes) -> tuple[UUID, str, str, UUID]:
 
 class SchemaClient:
     def __init__(self) -> None:
-        self.base_url = os.getenv("JAVA_BASE_URL", "http://localhost:8080")
-        self.api_key = os.getenv("INTERNAL_API_KEY", "")
+        self.control_plane = ControlPlaneClient()
 
     async def load(self, entity_id: UUID) -> IngestionSchema:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(
-                f"{self.base_url}/internal/v1/entities/{entity_id}/ingestion-schema",
-                headers={"X-Internal-API-Key": self.api_key},
-            )
+        response = await self.control_plane.get(
+            f"/internal/v1/entities/{entity_id}/ingestion-schema")
         if response.status_code == 404:
             raise ValueError("UNKNOWN_ENTITY")
         response.raise_for_status()
@@ -127,22 +124,16 @@ class SchemaClient:
         ]
         if not vocabulary:
             return await self.load(entity_id)
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.put(
-                f"{self.base_url}/internal/v1/entities/{entity_id}/categorical-vocabulary",
-                headers={"X-Internal-API-Key": self.api_key},
-                json={"columns": vocabulary},
-            )
+        response = await self.control_plane.put(
+            f"/internal/v1/entities/{entity_id}/categorical-vocabulary",
+            {"columns": vocabulary})
         response.raise_for_status()
         return self._project_ingestion_schema(response.json())
 
     async def register(self, descriptor) -> IngestionSchema:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(
-                f"{self.base_url}/internal/v1/entities/stream-registry/resolve",
-                headers={"X-Internal-API-Key": self.api_key},
-                json=descriptor.model_dump(by_alias=True, mode="json"),
-            )
+        response = await self.control_plane.post(
+            "/internal/v1/entities/stream-registry/resolve",
+            descriptor.model_dump(by_alias=True, mode="json"))
         if response.status_code == 409:
             raise ValueError("SCHEMA_MISMATCH")
         response.raise_for_status()
@@ -261,15 +252,13 @@ class SparkCsvIngester:
                 expressions.append(value.cast(TYPE_REGISTRY[item.data_type]).alias(item.column_name))
             governed = raw.select(*expressions)
             rows = governed.count()
-            output = Path(directory) / "refined"
-            governed.coalesce(1).write.mode("overwrite").parquet(str(output))
-            part = next(output.glob("part-*.parquet"))
             object_key = (
                 f"entities/{schema.entity_id}/imports/{import_id}/"
                 "data.parquet"
             )
-            self.minio.fput_object("refined", object_key, str(part))
-            return rows, object_key, part.stat().st_size
+            size = write_parquet_artifact(
+                governed, self.minio, "refined", object_key)
+            return rows, object_key, size
 
 
 class IngestionProcessor:

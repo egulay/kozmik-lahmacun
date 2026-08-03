@@ -17,6 +17,7 @@
   import ServerPagination from '$lib/components/ServerPagination.svelte';
   import DeleteExecutionButton from '$lib/components/DeleteExecutionButton.svelte';
   import { getWorkspaceView, openWorkspaceTab, setWorkspaceView } from '$lib/workspace-tabs';
+  import { subscribeExecutionEvents } from '$lib/execution-events';
 
   type ResultListView = {
     results: Execution[];
@@ -29,7 +30,7 @@
   let results = $state<Execution[]>(initialView?.results ?? []);
   let loading = $state(!initialView);
   let error = $state('');
-  let refreshTimer: ReturnType<typeof setInterval> | undefined;
+  let unsubscribeExecutionEvents: (() => void) | undefined;
   let pageNumber = $state(initialView?.pageNumber ?? 0);
   let pageSize = $state(initialView?.pageSize ?? 20);
   let totalElements = $state(initialView?.totalElements ?? 0);
@@ -45,10 +46,12 @@
       tabType: 'page'
     });
     void load(!initialView, pageNumber);
-    refreshTimer = setInterval(() => void load(false), 5_000);
+    unsubscribeExecutionEvents = subscribeExecutionEvents((_event, name) => {
+      if (name !== 'heartbeat') void load(false);
+    });
     window.addEventListener('focus', focusRefresh);
     return () => {
-      if (refreshTimer) clearInterval(refreshTimer);
+      unsubscribeExecutionEvents?.();
       window.removeEventListener('focus', focusRefresh);
     };
   });

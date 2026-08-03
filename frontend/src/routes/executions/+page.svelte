@@ -18,7 +18,7 @@
   import ServerPagination from '$lib/components/ServerPagination.svelte';
   import DeleteExecutionButton from '$lib/components/DeleteExecutionButton.svelte';
   import { getWorkspaceView, openWorkspaceTab, setWorkspaceView } from '$lib/workspace-tabs';
-  import { DurableEventStream } from '$lib/sse';
+  import { subscribeExecutionEvents } from '$lib/execution-events';
   import ExecutionTypeIcon from '$lib/components/ExecutionTypeIcon.svelte';
 
   type ExecutionListView = {
@@ -40,14 +40,13 @@
   let totalElements = $state(initialView?.totalElements ?? 0);
   let totalPages = $state(initialView?.totalPages ?? 0);
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
-  let refreshTimer: ReturnType<typeof setInterval> | undefined;
   let durationTimer: ReturnType<typeof setInterval> | undefined;
   let silentRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   let durationNow = $state(Date.now());
   let expanded = $state<Set<string>>(new Set());
   let liveStages = $state<Record<string, string>>({});
   let liveProgress = $state<Record<string, number>>({});
-  const streams = new Map<string, DurableEventStream>();
+  let unsubscribeExecutionEvents: (() => void) | undefined;
 
   onMount(() => {
     openWorkspaceTab({
@@ -56,17 +55,12 @@
       tabType: 'page'
     });
     void load(pageNumber, !initialView);
-    refreshTimer = setInterval(() => {
-      void load(pageNumber, false);
-      void refreshExpandedStages();
-    }, 2_000);
+    unsubscribeExecutionEvents = subscribeExecutionEvents(handleExecutionEvent);
     durationTimer = setInterval(() => (durationNow = Date.now()), 1_000);
     return () => {
-      if (refreshTimer) clearInterval(refreshTimer);
       if (durationTimer) clearInterval(durationTimer);
       if (silentRefreshTimer) clearTimeout(silentRefreshTimer);
-      streams.forEach((stream) => stream.close());
-      streams.clear();
+      unsubscribeExecutionEvents?.();
     };
   });
   async function load(targetPage = pageNumber, showLoading = true) {
@@ -97,7 +91,6 @@
           totalPages: response.totalPages
         });
       }
-      syncStreams(response.items);
     } catch (cause) {
       if (cause instanceof ApiError && [404, 405].includes(cause.status)) unsupported = true;
       else error = $t('apiUnavailable');
@@ -106,43 +99,28 @@
     }
   }
 
-  function syncStreams(items: Execution[]) {
-    const activeIds = new Set(items.filter((item) => !terminal(item.status)).map((item) => item.id));
-    for (const [id, stream] of streams) {
-      if (!activeIds.has(id)) {
-        stream.close();
-        streams.delete(id);
+  function handleExecutionEvent(event: MessageEvent, name: string) {
+    if (name === 'heartbeat') return;
+    if (name === 'reconnect') {
+      scheduleSilentRefresh();
+      return;
+    }
+    try {
+      const payload = JSON.parse(event.data) as {
+        executionId?: unknown;
+        stage?: unknown;
+        progressPercent?: unknown;
+      };
+      const id = typeof payload.executionId === 'string' ? payload.executionId : '';
+      if (id && typeof payload.stage === 'string') {
+        updateLiveStage(id, payload.stage,
+          typeof payload.progressPercent === 'number' ? payload.progressPercent : 0);
       }
+      if (id && executions.some((item) => item.id === id)) void loadLiveStage(id);
+    } catch {
+      // Authoritative REST reload below handles malformed events.
     }
-    for (const id of activeIds) {
-      if (streams.has(id)) continue;
-      void loadLiveStage(id);
-      const stream = new DurableEventStream(`/api/executions/${id}/stream`, {
-        onReconnect: () => scheduleSilentRefresh(),
-        onEvent: (event, name) => {
-          if (name === 'heartbeat') return;
-          try {
-            const payload = JSON.parse(event.data) as {
-              stage?: unknown;
-              progressPercent?: unknown;
-            };
-            if (typeof payload.stage === 'string') {
-              updateLiveStage(
-                id,
-                payload.stage,
-                typeof payload.progressPercent === 'number' ? payload.progressPercent : 0
-              );
-            }
-          } catch {
-            // Authoritative REST reload below handles malformed or non-status events.
-          }
-          void loadLiveStage(id);
-          scheduleSilentRefresh();
-        }
-      });
-      streams.set(id, stream);
-      stream.connect();
-    }
+    scheduleSilentRefresh();
   }
 
   async function loadLiveStage(executionId: string) {
@@ -155,13 +133,6 @@
     } catch {
       // The list remains authoritative and the SSE reconnect path will retry.
     }
-  }
-
-  async function refreshExpandedStages() {
-    const activeExpandedIds = executions
-      .filter((item) => expanded.has(item.id) && !terminal(item.status))
-      .map((item) => item.id);
-    await Promise.all(activeExpandedIds.map((id) => loadLiveStage(id)));
   }
 
   function updateLiveStage(executionId: string, stage: string, progress: number) {

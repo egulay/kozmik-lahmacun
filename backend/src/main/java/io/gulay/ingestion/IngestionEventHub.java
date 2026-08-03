@@ -2,72 +2,38 @@ package io.gulay.ingestion;
 
 import lombok.val;
 
-import java.io.IOException;
 import java.time.Instant;
-import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 
+import io.gulay.streaming.SseEventBroker;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
-import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @Component
 public class IngestionEventHub {
-    private final Map<UUID, CopyOnWriteArrayList<SseEmitter>> subscribers =
-            new ConcurrentHashMap<>();
-    private final CopyOnWriteArrayList<SseEmitter> globalSubscribers =
-            new CopyOnWriteArrayList<>();
-    private final int maxSubscribers;
+    private static final String GLOBAL_STREAM = "global";
+    private final SseEventBroker<UUID> entityBroker;
+    private final SseEventBroker<String> globalBroker;
 
     public IngestionEventHub(
             @Value("${kozmik.sse.max-subscribers-per-stream:10000}") int maxSubscribers) {
-        this.maxSubscribers = maxSubscribers;
+        this.entityBroker = new SseEventBroker<>(maxSubscribers, 300_000L);
+        this.globalBroker = new SseEventBroker<>(maxSubscribers, 300_000L);
     }
 
     public SseEmitter subscribeAll() {
-        if (globalSubscribers.size() >= maxSubscribers) {
-            throw new ResponseStatusException(
-                    HttpStatus.TOO_MANY_REQUESTS, "SSE subscriber limit reached");
-        }
-        val emitter = new SseEmitter(300_000L);
-        globalSubscribers.add(emitter);
-        emitter.onCompletion(() -> globalSubscribers.remove(emitter));
-        emitter.onTimeout(() -> globalSubscribers.remove(emitter));
-        emitter.onError(error -> globalSubscribers.remove(emitter));
-        return emitter;
+        return globalBroker.subscribe(GLOBAL_STREAM);
     }
 
     public SseEmitter subscribe(UUID entityId) {
-        val entitySubscribers = subscribers.computeIfAbsent(
-                entityId, ignored -> new CopyOnWriteArrayList<>());
-        if (entitySubscribers.size() >= maxSubscribers) {
-            throw new ResponseStatusException(
-                    HttpStatus.TOO_MANY_REQUESTS, "SSE subscriber limit reached");
-        }
-        val emitter = new SseEmitter(300_000L);
-        entitySubscribers.add(emitter);
-        emitter.onCompletion(() -> remove(entityId, emitter));
-        emitter.onTimeout(() -> remove(entityId, emitter));
-        emitter.onError(error -> remove(entityId, emitter));
-        return emitter;
+        return entityBroker.subscribe(entityId);
     }
 
     public void publish(IngestionUiEvent event) {
         publishGlobal(event);
-        for (val emitter : subscribers.getOrDefault(
-                event.entityId(), new CopyOnWriteArrayList<>())) {
-            try {
-                emitter.send(SseEmitter.event().id(event.eventId().toString())
-                        .name(event.eventType()).data(event));
-            } catch (IOException exception) {
-                emitter.complete();
-                remove(event.entityId(), emitter);
-            }
-        }
+        entityBroker.publish(event.entityId(), event.eventId().toString(),
+                event.eventType(), event);
     }
 
     private void publishGlobal(IngestionUiEvent event) {
@@ -75,23 +41,8 @@ public class IngestionEventHub {
                 "1.0", event.eventId(), event.entityId(),
                 "entity-ingestion-changed", event.ingestionKind(),
                 event.stage(), event.status(), event.occurredAt());
-        for (val emitter : globalSubscribers) {
-            try {
-                emitter.send(SseEmitter.event().id(event.eventId().toString())
-                        .name(notification.eventType()).data(notification));
-            } catch (IOException exception) {
-                emitter.complete();
-                globalSubscribers.remove(emitter);
-            }
-        }
-    }
-
-    private void remove(UUID entityId, SseEmitter emitter) {
-        val values = subscribers.get(entityId);
-        if (values != null) {
-            values.remove(emitter);
-            if (values.isEmpty()) subscribers.remove(entityId, values);
-        }
+        globalBroker.publish(GLOBAL_STREAM, event.eventId().toString(),
+                notification.eventType(), notification);
     }
 
     public record IngestionUiEvent(

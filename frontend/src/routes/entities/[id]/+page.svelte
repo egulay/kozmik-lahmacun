@@ -229,9 +229,11 @@
         <div>
           <Card.Description>{$t('ingestionActivity')}</Card.Description>
           <Card.Title class="text-base">
-            {ingestionStatus || entity.latestImportStatus
-              ? statusLabel(ingestionStatus || entity.latestImportStatus || 'UNKNOWN', $locale)
-              : '—'}
+            {ingestionActive
+              ? $t('ingestionInProgressDescription')
+              : (ingestionStatus || entity.latestImportStatus) === 'COMPLETED'
+                ? $t('ingestionCompletedDescription')
+                : $t('ingestionStatusDescription')}
           </Card.Title>
         </div>
       </div>

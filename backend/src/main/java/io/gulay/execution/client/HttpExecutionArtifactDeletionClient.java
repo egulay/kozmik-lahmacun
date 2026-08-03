@@ -2,23 +2,19 @@ package io.gulay.execution.client;
 
 import java.util.List;
 import java.util.UUID;
+import java.time.Duration;
 
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestClient;
+import tools.jackson.databind.ObjectMapper;
+import io.gulay.executor.client.PythonExecutorTransport;
 
 @Component
 @RequiredArgsConstructor
 public class HttpExecutionArtifactDeletionClient implements ExecutionArtifactDeletionClient {
 
-    private final RestClient.Builder restClientBuilder;
-
-    @Value("${kozmik.python.base-url:http://localhost:8000}")
-    private String pythonBaseUrl;
-    @Value("${kozmik.security.internal-api-key:}")
-    private String internalApiKey;
+    private final PythonExecutorTransport transport;
+    private final ObjectMapper objectMapper;
 
     @Override
     public void delete(
@@ -26,15 +22,19 @@ public class HttpExecutionArtifactDeletionClient implements ExecutionArtifactDel
         if (artifacts.isEmpty()) {
             return;
         }
-        restClientBuilder.baseUrl(pythonBaseUrl).build()
-                .post()
-                .uri("/internal/v1/artifacts/delete")
-                .contentType(MediaType.APPLICATION_JSON)
-                .header("X-Internal-API-Key", internalApiKey)
-                .header("X-Correlation-ID", correlationId)
-                .body(new DeleteRequest("1.0", executionId, artifacts))
-                .retrieve()
-                .toBodilessEntity();
+        try {
+            var body = objectMapper.writeValueAsString(
+                    new DeleteRequest("1.0", executionId, artifacts));
+            var response = transport.postJson("/internal/v1/artifacts/delete", body,
+                    correlationId, Duration.ofSeconds(30));
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                throw new IllegalStateException("Executor artifact deletion failed");
+            }
+        } catch (RuntimeException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new IllegalStateException("Executor artifact deletion failed", exception);
+        }
     }
 
     private record DeleteRequest(

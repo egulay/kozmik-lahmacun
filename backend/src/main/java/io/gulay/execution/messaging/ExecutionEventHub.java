@@ -1,62 +1,40 @@
 package io.gulay.execution.messaging;
 
-import lombok.val;
-
-import java.io.IOException;
-import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 
+import io.gulay.streaming.SseEventBroker;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
-import org.springframework.web.server.ResponseStatusException;
-import org.springframework.http.HttpStatus;
 
 @Component
 public class ExecutionEventHub {
-    private final Map<UUID, CopyOnWriteArrayList<SseEmitter>> emitters = new ConcurrentHashMap<>();
-    private final int maxSubscribers;
+    private static final String ADMIN_STREAM = "administrators";
+    private final SseEventBroker<UUID> broker;
+    private final SseEventBroker<String> userBroker;
+    private final SseEventBroker<String> adminBroker;
 
     public ExecutionEventHub(
             @Value("${kozmik.sse.max-subscribers-per-stream:10000}") int maxSubscribers) {
-        this.maxSubscribers = maxSubscribers;
+        this.broker = new SseEventBroker<>(maxSubscribers, 300_000L);
+        this.userBroker = new SseEventBroker<>(maxSubscribers, 300_000L);
+        this.adminBroker = new SseEventBroker<>(maxSubscribers, 300_000L);
     }
 
     public SseEmitter subscribe(UUID executionId) {
-        val values = emitters.computeIfAbsent(
-                executionId, ignored -> new CopyOnWriteArrayList<>());
-        if (values.size() >= maxSubscribers) {
-            throw new ResponseStatusException(
-                    HttpStatus.TOO_MANY_REQUESTS, "SSE subscriber limit reached");
-        }
-        val emitter = new SseEmitter(300_000L);
-        values.add(emitter);
-        emitter.onCompletion(() -> remove(executionId, emitter));
-        emitter.onTimeout(() -> remove(executionId, emitter));
-        emitter.onError(error -> remove(executionId, emitter));
-        return emitter;
+        return broker.subscribe(executionId);
     }
 
-    public void publish(UUID executionId, UUID eventId, String type, Object data) {
-        for (val emitter : emitters.getOrDefault(executionId, new CopyOnWriteArrayList<>())) {
-            try {
-                emitter.send(SseEmitter.event().id(eventId.toString()).name(type).data(data));
-            } catch (IOException exception) {
-                emitter.complete();
-                remove(executionId, emitter);
-            }
-        }
+    public SseEmitter subscribeAll(String userSubject, boolean administrator) {
+        return administrator
+                ? adminBroker.subscribe(ADMIN_STREAM)
+                : userBroker.subscribe(userSubject);
     }
 
-    private void remove(UUID executionId, SseEmitter emitter) {
-        val values = emitters.get(executionId);
-        if (values != null) {
-            values.remove(emitter);
-            if (values.isEmpty()) {
-                emitters.remove(executionId, values);
-            }
-        }
+    public void publish(
+            UUID executionId, String userSubject, UUID eventId, String type, Object data) {
+        broker.publish(executionId, eventId.toString(), type, data);
+        userBroker.publish(userSubject, eventId.toString(), type, data);
+        adminBroker.publish(ADMIN_STREAM, eventId.toString(), type, data);
     }
 }

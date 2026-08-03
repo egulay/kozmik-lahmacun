@@ -106,6 +106,13 @@ public class ExecutionController {
         return eventHub.subscribe(executionId);
     }
 
+    @GetMapping(path = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    SseEmitter streamAll(
+            @AuthenticationPrincipal OidcUser user, Authentication authentication) {
+        return eventHub.subscribeAll(user.getSubject(),
+                roles(authentication).contains(PlatformRole.ADMIN));
+    }
+
     @GetMapping("/{executionId}/result")
     ResultDtos.ResultResponse result(
             @PathVariable java.util.UUID executionId,

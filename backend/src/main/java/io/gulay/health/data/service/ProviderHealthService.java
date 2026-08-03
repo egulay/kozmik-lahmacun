@@ -3,34 +3,34 @@ package io.gulay.health.data.service;
 import lombok.val;
 
 import java.util.Map;
+import java.time.Duration;
 
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestClient;
+import tools.jackson.databind.ObjectMapper;
+import io.gulay.executor.client.PythonExecutorTransport;
 
 @Service
 public class ProviderHealthService {
-    private final RestClient restClient;
-    private final String internalApiKey;
+    private final PythonExecutorTransport transport;
+    private final ObjectMapper objectMapper;
 
     public ProviderHealthService(
-            RestClient.Builder builder,
-            @Value("${kozmik.python.base-url}") String pythonBaseUrl,
-            @Value("${kozmik.security.internal-api-key:}") String internalApiKey) {
-        this.restClient = builder.baseUrl(pythonBaseUrl).build();
-        this.internalApiKey = internalApiKey;
+            PythonExecutorTransport transport, ObjectMapper objectMapper) {
+        this.transport = transport;
+        this.objectMapper = objectMapper;
     }
 
     public Snapshot check() {
-        if (internalApiKey.isBlank()) {
+        if (transport.getInternalApiKey().isBlank()) {
             return new Snapshot("UNKNOWN", "UNKNOWN", null, null, null);
         }
         try {
-            val response = restClient.get()
-                    .uri("/internal/v1/health")
-                    .header("X-Internal-API-Key", internalApiKey)
-                    .retrieve()
-                    .body(Map.class);
+            val httpResponse = transport.get("/internal/v1/health", Duration.ofSeconds(5));
+            if (httpResponse.statusCode() != 200) {
+                return new Snapshot("UNAVAILABLE", "UNKNOWN", null, null,
+                        "EXECUTOR_UNAVAILABLE");
+            }
+            val response = objectMapper.readValue(httpResponse.body(), Map.class);
             if (response == null) {
                 return new Snapshot("UNAVAILABLE", "UNKNOWN", null, null,
                         "EXECUTOR_UNAVAILABLE");

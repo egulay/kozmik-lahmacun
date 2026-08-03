@@ -7,7 +7,9 @@ import io.gulay.health.data.service.ProviderHealthService;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
-import org.springframework.web.client.RestClient;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
+import io.gulay.executor.client.PythonExecutorTransport;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ProviderHealthServiceTest {
@@ -29,9 +31,9 @@ class ProviderHealthServiceTest {
         server.start();
         try {
             val service = new ProviderHealthService(
-                    RestClient.builder(),
-                    "http://localhost:" + server.getAddress().getPort(),
-                    "internal-test-key");
+                    new PythonExecutorTransport(
+                            "http://localhost:" + server.getAddress().getPort(),
+                            "internal-test-key"), JsonMapper.builder().build());
 
             assertThat(service.check()).isEqualTo(
                     new ProviderHealthService.Snapshot(
@@ -44,7 +46,8 @@ class ProviderHealthServiceTest {
     @Test
     void doesNotAttemptHealthWithoutInternalCredential() {
         val service = new ProviderHealthService(
-                RestClient.builder(), "http://localhost:1", "");
+                new PythonExecutorTransport("http://localhost:1", ""),
+                JsonMapper.builder().build());
 
         assertThat(service.check()).isEqualTo(
                 new ProviderHealthService.Snapshot(
