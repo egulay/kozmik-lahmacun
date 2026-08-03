@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatDisplayValue,
   formatDuration,
-  formatManagementSummary,
+  formatResultSummary,
   formatTemporalBucket,
   humanizeField
 } from './utils';
@@ -43,8 +43,10 @@ describe('result presentation formatting', () => {
   });
 
   it('removes provider template labels from management summaries', () => {
-    expect(formatManagementSummary(
-      '**Decision Summary** Web led sales. **Approved Warnings** None'
+    expect(formatResultSummary(
+      '**Result Summary** Web led sales. **Approved Warnings** None'
     )).toBe('Web led sales.');
+    expect(formatResultSummary('**Summary** Web led sales.')).toBe('Web led sales.');
+    expect(formatResultSummary('**Özet** Web satışları önde.')).toBe('Web satışları önde.');
   });
 });

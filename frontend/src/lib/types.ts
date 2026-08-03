@@ -105,6 +105,9 @@ export interface ExecutionFailure {
 export interface ResultArtifact {
   artifactId: string;
   format: string;
+  bucket?: string;
+  objectKey?: string;
+  storageUri?: string;
 }
 
 export interface ExecutionResult {
@@ -117,13 +120,7 @@ export interface ExecutionResult {
   artifact: ResultArtifact;
   guidanceKey: string;
   summaryStatus: string;
-  managementSummary?: string | null;
-  summaryValidationStatus:
-    | 'ACCEPTED'
-    | 'ACCEPTED_WITH_ADVISORIES'
-    | 'REJECTED'
-    | 'PROVIDER_FAILED'
-    | 'LEGACY_UNVALIDATED';
+  resultSummary?: string | null;
   metrics?: unknown;
   previewPage: number;
   previewSize: number;

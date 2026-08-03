@@ -12,10 +12,13 @@ pipelines. Reporters request controlled reports in natural language.
 Scientists and Administrators can additionally request predictive analysis,
 automatic model comparison, and bounded what-if evaluation.
 
-The platform enforces the following privacy invariant:
-
-> Your underlying corporate datasets are never sent to or processed by the
-> LLM. They remain inside the controlled execution environment.
+The ingested corporate dataset remains inside the controlled execution
+environment while Spark performs the governed calculation. For the separate
+summary stage, the LLM receives the original request, result schema, complete
+result row count, and the calculated result information displayed by the
+application. Complete execution-result rows are included only when the result
+contains at most 100 rows; for larger results, only the count and non-row
+result information are included.
 
 The LLM interprets a request using authorized entity and column metadata and
 proposes a versioned JSON execution order. Python validates that order against
@@ -24,8 +27,8 @@ then does trusted Spark code process data inside the controlled environment.
 Arbitrary SQL, generated Python, generated shell commands, and arbitrary
 executable code are not accepted.
 
-After Spark finishes, the LLM receives a separate privacy-safe calculated-result
-object—not the underlying dataset—to produce a plain-language management summary. This
+After Spark finishes, the LLM receives that bounded execution-result contract
+to produce a plain-language business summary. This
 applies to both reports and ML results. A non-technical manager can therefore
 ask for a grouped sales comparison, a prediction, or a controlled scenario
 analysis and receive the calculation, visualizations, relevant limitations,
@@ -52,7 +55,7 @@ For a non-technical user, the primary workflow is conversational:
 2. Describe a report, prediction, or controlled what-if question.
 3. Continue working while the request is planned and executed asynchronously.
 4. Follow durable execution progress from the UI.
-5. Open the completed result with management summary, KPIs, metrics, charts,
+5. Open the completed result with result summary, KPIs, metrics, charts,
    warnings, and a bounded preview.
 
 The platform handles the technical translation:
@@ -64,7 +67,7 @@ Natural-language request
   -> deterministic validation
   -> trusted Spark operations
   -> governed result and artifacts
-  -> privacy-safe management explanation
+  -> privacy-safe result explanation
 ```
 
 Users do not need to select an estimator, construct filters or aggregations,
@@ -141,7 +144,7 @@ sequenceDiagram
     User->>UI: Natural-language request
     UI->>Java: Authenticated chat request
     Java->>Python: Request, role and authorized schema metadata
-    Python->>LLM: Request and limited structural metadata, no underlying dataset
+    Python->>LLM: Request and authorized entity/column metadata
     LLM-->>Python: Structured order proposal
     Python->>Python: Registry, schema, role and parameter validation
     Python-->>Java: Validated governed order
@@ -266,6 +269,14 @@ the following structure:
         "businessNameTr": "Ücret tutarı",
         "dataType": "DECIMAL",
         "ordinalPosition": 5
+      },
+      {
+        "columnName": "currency_code",
+        "businessName": "Currency code",
+        "businessNameTr": "Para birimi kodu",
+        "dataType": "STRING",
+        "ordinalPosition": 6,
+        "categoricalValues": ["TRY"]
       }
     ]
   },
@@ -277,13 +288,15 @@ the following structure:
       "cdr_id": "CDR-000021001",
       "event_time": "2026-07-30T10:15:27Z",
       "duration_seconds": 184,
-      "charge_amount": 12.45
+      "charge_amount": 12.45,
+      "currency_code": "TRY"
     },
     {
       "cdr_id": "CDR-000021002",
       "event_time": "2026-07-30T10:15:29Z",
       "duration_seconds": 61,
-      "charge_amount": 4.1
+      "charge_amount": 4.1,
+      "currency_code": "TRY"
     }
   ]
 }
@@ -524,20 +537,23 @@ ranges and compares predicted outcomes with an unchanged baseline. It does not
 establish causality or automatically account for demand, cost, profit,
 retention, competitor response, or other unmeasured effects.
 
-## Management summaries and privacy
+## Result summaries and privacy
 
-Management explanation is a separate, non-critical stage after trusted
+Result explanation is a separate, non-critical stage after trusted
 execution:
 
 1. Spark finishes and durable artifacts are written.
-2. Python constructs an allowlisted, privacy-safe calculated-result object.
-3. Direct identifiers, source datasets, record-level contents, prediction
-   previews and object paths are excluded.
-4. Approved report breakdowns, scalar KPIs, metrics, warnings, strongest
-   drivers and controlled scenario facts may be included.
-5. The configured LLM writes a Turkish or English management summary that answers
+2. Python constructs a typed summary-input contract from the completed execution result.
+3. The ingested source dataset and object-storage artifacts are not attached to
+   the summary request.
+4. The original request, result schema, scalar KPIs, metrics, charts, warnings,
+   model-selection information and controlled scenario facts are included.
+5. The authoritative row count is always included. Complete calculated result
+   rows are included when the result contains at most 100 rows; larger results
+   omit rows while retaining all other result information.
+6. The configured LLM writes a Turkish or English result summary that answers
    the original business request; no application-level summary-length limit is imposed.
-6. Java persists the summary status and text with the result.
+7. Java persists the summary status and text with the result.
 
 Report summaries describe approved comparisons, rankings, ranges, or time
 patterns. ML summaries describe reliability and important drivers without
@@ -623,60 +639,6 @@ walkthrough that follows shows representative executions and results.
 > değeriyle karşılaştır ve yalnızca hesaplanan kanıta dayanarak yönetime koşullu
 > bir öneri sun.
 
-## Product walkthrough
-
-The following captures show the current browser product running against the
-local integrated suite. They illustrate durable execution tracking, governed
-reporting, automatic ML model selection, bounded previews, localized entity
-metadata, and the English/Turkish experience.
-
-### Natural-language chat
-
-The chat workspace accepts conversational, reporting, and predictive-analysis
-requests. Valid analytical requests are handed to the controlled execution
-environment asynchronously, with a durable execution link returned directly
-in the conversation.
-
-| English chat workspace | Turkish chat workspace |
-|---|---|
-| ![English natural-language chat and asynchronous execution hand-off](screens/chat-workspace.png) | ![Turkish natural-language chat and asynchronous execution hand-off](screens/chat-workspace-tr.png) |
-
-### Report execution and result
-
-| Durable execution timeline | Management summary, indicators and chart |
-|---|---|
-| ![Report execution timeline](screens/report-execution-timeline.png) | ![Report result with management summary, indicators and regional chart](screens/report-result-summary-chart.png) |
-
-### Machine-learning result
-
-| Plain-language management summary | Model selection, indicators and scenario charts |
-|---|---|
-| ![English ML result and management summary](screens/ml-result-summary-en.png) | ![English ML metrics, feature importance and what-if charts](screens/ml-result-metrics-charts-en.png) |
-
-The browser exposes only a bounded result preview; the complete governed
-result remains in object storage and is referenced by durable metadata.
-
-![Bounded ML predictions preview](screens/ml-result-preview-en.png)
-
-### Governed data entities
-
-Entity names, descriptions and business column labels are generated from
-structural metadata during ingestion in both supported languages. Switching
-the UI language selects the stored localized presentation; it does not send
-the underlying dataset to the LLM.
-
-| Registered entities | Entity structure and ingestion state |
-|---|---|
-| ![Turkish governed data-entity list](screens/data-entities-tr.png) | ![Turkish data-entity detail with localized columns](screens/data-entity-detail-tr.png) |
-
-### Turkish execution and result experience
-
-| Live ML execution progress | Turkish management result |
-|---|---|
-| ![Turkish ML execution progress timeline](screens/ml-execution-progress-tr.png) | ![Turkish ML result and management summary](screens/ml-result-summary-tr.png) |
-
-![Turkish ML indicators, feature importance and scenario comparison](screens/ml-result-charts-tr.png)
-
 ## Technology stack
 
 | Layer | Technologies |
@@ -746,7 +708,7 @@ communication uses versioned HTTP and Kafka contracts.
   mutate the schema at runtime.
 - LLM inputs are allowlisted and size-bounded. Source datasets, result
   previews, direct identifiers, credentials and object paths are excluded from
-  management-summary prompts.
+  result-summary prompts.
 - Failure records store safe codes, retryability, a sanitized technical reason,
   and a management-readable explanation.
 - Deletion is ownership-aware. Execution deletion removes analytical artifacts
@@ -1245,7 +1207,7 @@ fifty-thousand-row Sales datasets.
   Parquet artifacts and are not directly downloadable.
 - What-if results are conditional predictions, not causal evidence or
   guaranteed business outcomes.
-- Management-summary quality depends on provider capability and the clarity of
+- Result-summary quality depends on provider capability and the clarity of
   available schema metadata, while deterministic validators remain the
   execution authority.
 - A summary-provider failure does not fail a completed Spark result.
@@ -1307,7 +1269,7 @@ Permission and commercial-license requests: emre@gulay.io
 - [LLM provider and classification](docs/llm-provider-and-classification.md)
 - [Trusted report execution](docs/trusted-report-execution.md)
 - [ML planning and execution](docs/ml-planning-and-execution.md)
-- [Privacy-safe result explanation](docs/privacy-safe-result-explanation.md)
+- [Privacy-safe result explanation](docs/result-summary-pipeline.md)
 - [MinIO ingestion](docs/minio-ingestion.md)
 - [Streaming ingestion](docs/streaming-ingestion.md)
 - [Chat streaming](docs/chat-streaming.md)

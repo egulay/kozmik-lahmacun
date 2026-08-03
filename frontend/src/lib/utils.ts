@@ -98,10 +98,10 @@ export function formatTemporalBucket(value: unknown, granularity?: string) {
 	return `${isoDate[1]}-${isoDate[2]}-${isoDate[3]}`;
 }
 
-export function formatManagementSummary(value: string) {
+export function formatResultSummary(value: string) {
 	return value
 		.replace(
-			/^\s*(?:\*\*)?(?:decision summary|management summary|karar özeti|yönetici özeti)(?:\*\*)?\s*:?\s*/i,
+			/^\s*(?:\*\*)?(?:result summary|summary|sonuç özeti|özet)(?:\*\*)?\s*:?\s*/i,
 			"",
 		)
 		.split(

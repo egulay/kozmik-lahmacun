@@ -20,6 +20,8 @@ class EventEnvelope(ContractModel):
 
 class ExecutionCommand(EventEnvelope):
     execution_type: Literal["REPORT", "ML"]
+    original_request: str | None = Field(default=None, min_length=1, max_length=4_000)
+    data_schema: dict[str, Any] | None = None
     order: ReportOrder | MlOrder
     authorization: dict[str, Any]
     configuration: dict[str, Any]
@@ -76,18 +78,8 @@ class ExecutionResultNotification(EventEnvelope):
     artifact: dict[str, Any]
     model_artifact: dict[str, Any] | None = None
     summary_status: Literal["COMPLETED", "FAILED"]
-    management_summary: str | None = None
-    summary_evidence: dict[str, Any]
-    summary_validation_status: Literal[
-        "ACCEPTED", "ACCEPTED_WITH_ADVISORIES", "REJECTED", "PROVIDER_FAILED"
-    ]
-    summary_validation_issues: list[str] = Field(max_length=50)
-    summary_audit: dict[str, Any] | None = None
-    summary_blocking_issues: list[str] = Field(max_length=50)
-    summary_advisory_issues: list[str] = Field(max_length=50)
-    # Structured repair and prose-only recovery are both audited here. Recovery
-    # depth must never invalidate an otherwise completed analytical result.
-    summary_repair_attempt_count: int = Field(ge=0)
+    result_summary: str | None = None
     summary_provider: str
     summary_provider_model: str
     summary_generated_at: datetime
+    summary_error_code: str | None = None

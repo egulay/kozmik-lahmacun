@@ -82,6 +82,9 @@ async def send_chunk(producer, arguments, stream_id, sequence, records) -> None:
              "ordinalPosition": 7},
             {"columnName": "charge_amount", "businessName": "Charge amount",
              "dataType": "DECIMAL", "ordinalPosition": 8},
+            {"columnName": "currency_code", "businessName": "Currency code",
+             "dataType": "STRING", "ordinalPosition": 9,
+             "categoricalValues": ["TRY"]},
         ],
     }
     chunk = StreamIngestionChunk(

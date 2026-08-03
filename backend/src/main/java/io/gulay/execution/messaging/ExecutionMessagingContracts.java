@@ -12,7 +12,8 @@ public final class ExecutionMessagingContracts {
     public record ExecutionCommand(
             String schemaVersion, UUID eventId, String correlationId, UUID executionId,
             UUID entityId, UUID actorUserId, Instant occurredAt, String executionType,
-            JsonNode order, JsonNode authorization, JsonNode configuration) {
+            String originalRequest, JsonNode dataSchema, JsonNode order, JsonNode authorization,
+            JsonNode configuration) {
     }
 
     public record ExecutionStatusEvent(
@@ -44,12 +45,9 @@ public final class ExecutionMessagingContracts {
             UUID entityId, UUID actorUserId, Instant occurredAt, String status,
             String resultCode, long rowCount, JsonNode preview, JsonNode kpis,
             JsonNode charts, JsonNode warnings, Artifact artifact,
-            Artifact modelArtifact, String summaryStatus, String managementSummary,
-            JsonNode summaryEvidence, String summaryValidationStatus,
-            JsonNode summaryValidationIssues, JsonNode summaryAudit,
-            JsonNode summaryBlockingIssues, JsonNode summaryAdvisoryIssues,
-            int summaryRepairAttemptCount, String summaryProvider,
-            String summaryProviderModel, Instant summaryGeneratedAt) {
+            Artifact modelArtifact, String summaryStatus, String resultSummary,
+            String summaryProvider, String summaryProviderModel,
+            Instant summaryGeneratedAt, String summaryErrorCode) {
     }
 
     public record Artifact(

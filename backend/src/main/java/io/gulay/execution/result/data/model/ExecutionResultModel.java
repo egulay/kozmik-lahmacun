@@ -48,37 +48,18 @@ public class ExecutionResultModel {
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "warnings_json", nullable = false, columnDefinition = "jsonb")
     private String warningsJson;
-    @Column(name = "management_summary", columnDefinition = "text")
-    private String managementSummary;
+    @Column(name = "result_summary", columnDefinition = "text")
+    private String resultSummary;
     @Column(name = "summary_status", nullable = false)
     private String summaryStatus;
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "summary_evidence_json", nullable = false, columnDefinition = "jsonb")
-    private String summaryEvidenceJson;
-    @Column(name = "summary_validation_status", nullable = false)
-    private String summaryValidationStatus;
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "summary_validation_issues_json", nullable = false, columnDefinition = "jsonb")
-    private String summaryValidationIssuesJson;
-    @Column(name = "summary_evidence_schema_version", nullable = false)
-    private String summaryEvidenceSchemaVersion;
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "summary_audit_json", columnDefinition = "jsonb")
-    private String summaryAuditJson;
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "summary_blocking_issues_json", nullable = false, columnDefinition = "jsonb")
-    private String summaryBlockingIssuesJson;
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "summary_advisory_issues_json", nullable = false, columnDefinition = "jsonb")
-    private String summaryAdvisoryIssuesJson;
-    @Column(name = "summary_repair_attempt_count", nullable = false)
-    private int summaryRepairAttemptCount;
     @Column(name = "summary_provider", nullable = false)
     private String summaryProvider;
     @Column(name = "summary_provider_model", nullable = false)
     private String summaryProviderModel;
     @Column(name = "summary_generated_at", nullable = false)
     private Instant summaryGeneratedAt;
+    @Column(name = "summary_error_code")
+    private String summaryErrorCode;
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 }

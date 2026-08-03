@@ -15,7 +15,7 @@ Result: **PASS**
 | Scientist scenarios | Approved deterministic linear-regression scenarios for sales and CDR |
 | Admin scenario | Configuration, signed restart, drain, replay rejection and reload checklist |
 | Turkish/English UI | Playwright verifies locale switch, translated privacy text and document language |
-| Privacy | Recording-provider test proves preview rows, identifiers and unapproved fields are absent from the LLM request |
+| Summary input | Recording-provider tests prove the original request, schema, total count and result information are supplied; complete result rows are included through 100 rows and omitted above 100 |
 | Execution | Deterministic worker, Spark report and Spark ML tests cover lifecycle through result artifacts |
 | SSE recovery | Frontend test proves event-ID deduplication and authoritative REST reload before reconnect |
 | Public packaging | Public README is concise; private `analysis/` material is ignored by default |
@@ -44,7 +44,10 @@ Observed results:
 
 ## Security assertions
 
-- No raw business rows are sent to an LLM.
+- Summary requests never attach the ingested source dataset. They include the
+  calculated execution-result rows only when the complete result contains at
+  most 100 rows; larger results include the authoritative count and non-row
+  result information instead.
 - No secrets are embedded in generated data, scripts, scenarios or documentation.
 - The browser continues to communicate only with Java.
 - Python has no PostgreSQL, Keycloak or Docker control dependency.

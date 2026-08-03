@@ -12,7 +12,7 @@ from pathlib import Path
 SALES_ENTITY_ID = "11111111-1111-4111-8111-111111111111"
 CDR_COLUMNS = (
     "cdr_id", "event_time", "origin_region", "destination_region",
-    "duration_seconds", "call_type", "roaming", "charge_amount",
+    "duration_seconds", "call_type", "roaming", "charge_amount", "currency_code",
 )
 SALES_COLUMNS = (
     "sale_id", "sale_date", "region", "channel", "product_category",
@@ -41,6 +41,7 @@ def write_cdr(path: Path, rows: int = 1_000_000, seed: int = 42) -> None:
                 call_type,
                 str(index % 19 == 0).lower(),
                 f"{(duration * 0.012 + (2.5 if index % 19 == 0 else 0)):.2f}",
+                "TRY",
             ))
 
 

@@ -58,10 +58,12 @@ public class ResultQueryService {
             return new ResultDtos.ResultResponse("1.0", executionId, result.getRowCount(),
                     pagedPreview, mapper.readTree(result.getKpisJson()),
                     mapper.readTree(result.getChartsJson()), mapper.readTree(result.getWarningsJson()),
-                    new ResultDtos.ArtifactResponse(artifact.getId(), artifact.getFormat()),
+                    new ResultDtos.ArtifactResponse(
+                            artifact.getId(), artifact.getFormat(),
+                            artifact.getBucketName(), artifact.getObjectKey(),
+                            "s3://" + artifact.getBucketName() + "/" + artifact.getObjectKey()),
                     "result.guidance.governedPreview",
-                    result.getSummaryStatus(), result.getManagementSummary(),
-                    result.getSummaryValidationStatus(),
+                    result.getSummaryStatus(), result.getResultSummary(),
                     page, size, totalElements, totalPages);
         } catch (Exception exception) {
             throw new IllegalStateException("Stored result is invalid", exception);

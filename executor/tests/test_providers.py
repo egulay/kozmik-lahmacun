@@ -126,6 +126,28 @@ async def test_lm_studio_structured_completion_accepts_fenced_json() -> None:
 
 
 @pytest.mark.anyio
+async def test_lm_studio_text_completion_accepts_plain_prose() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["stream"] is False
+        assert "response_format" not in payload
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {
+                "content": "Call volume was highest in January."
+            }}]},
+        )
+
+    provider = LmStudioProvider(
+        config("LM_STUDIO"), transport=httpx.MockTransport(handler)
+    )
+
+    assert await provider.complete_text("system", "request") == (
+        "Call volume was highest in January."
+    )
+
+
+@pytest.mark.anyio
 async def test_retry_exhaustion_returns_typed_timeout() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("timed out", request=request)

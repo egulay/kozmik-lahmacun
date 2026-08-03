@@ -250,19 +250,11 @@ class ReportPlanningIntegrationTest {
         jdbc.update("""
                 insert into execution_result
                 (id, execution_id, schema_version, row_count, preview_json, kpis_json,
-                 charts_json, warnings_json, management_summary, summary_status,
-                 summary_evidence_json, summary_validation_status,
-                 summary_validation_issues_json, summary_evidence_schema_version,
-                 summary_audit_json, summary_blocking_issues_json,
-                 summary_advisory_issues_json, summary_repair_attempt_count,
+                 charts_json, warnings_json, result_summary, summary_status,
                  summary_provider, summary_provider_model, summary_generated_at, created_at)
                 values (?, ?, '1.0', 1, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
                         '[]'::jsonb, 'Done', 'COMPLETED',
-                        '{"schemaVersion":"2.0","semanticRegistryVersion":"1.0"}'::jsonb,
-                        'ACCEPTED', '[]'::jsonb, '2.0',
-                        '{"schemaVersion":"2.0","language":"en","prose":"Done","evidenceIds":["result.row-count"],"scope":{}}'::jsonb,
-                        '[]'::jsonb, '[]'::jsonb,
-                        0, 'test', 'test-model', now(), now())
+                        'test', 'test-model', now(), now())
                 """, resultId, executionId);
         jdbc.update("""
                 insert into execution_artifact
@@ -415,7 +407,7 @@ class ReportPlanningIntegrationTest {
         val executionId = UUID.fromString(mapper.readTree(response).path("id").stringValue());
         val eventId = UUID.randomUUID();
         val artifactId = UUID.randomUUID();
-        val managementSummary = "Evidence-grounded management explanation. ".repeat(3_000);
+        val resultSummary = "Evidence-grounded result explanation. ".repeat(3_000);
         val event = mapper.createObjectNode()
                 .put("schemaVersion", "1.0").put("eventId", eventId.toString())
                 .put("correlationId", "result-integration")
@@ -425,35 +417,7 @@ class ReportPlanningIntegrationTest {
                 .put("occurredAt", Instant.now().toString())
                 .put("status", "SUCCEEDED").put("resultCode", "EXECUTION_RESULT_READY")
                 .put("rowCount", 123).put("summaryStatus", "COMPLETED")
-                .put("managementSummary", managementSummary)
-                .put("summaryValidationStatus", "ACCEPTED");
-        event.putObject("summaryEvidence")
-                .put("schemaVersion", "2.0")
-                .put("semanticRegistryVersion", "1.0")
-                .put("executionType", "REPORT")
-                .put("language", "en")
-                .put("containsRawRows", false);
-        event.putArray("summaryValidationIssues");
-        val audit = event.putObject("summaryAudit").put("schemaVersion", "2.0")
-                .put("language", "en")
-                .put("prose", "Evidence-grounded management explanation.");
-        audit.putArray("evidenceIds").add("result.row-count");
-        val scope = audit.putObject("scope");
-        scope.putArray("evidenceScopes").add("COMPLETE_RESULT");
-        scope.putArray("populationScopes").add("OVERALL");
-        scope.putArray("groupingDimensions");
-        scope.putArray("groupingValues");
-        scope.putArray("periods");
-        scope.putArray("aggregations");
-        scope.putArray("datasetRoles").add("NONE");
-        scope.putArray("scenarioCodes");
-        scope.putArray("selectedModels");
-        scope.putArray("selectionMetrics");
-        scope.putArray("metricCodes");
-        scope.putArray("metricAveragingScopes");
-        event.putArray("summaryBlockingIssues");
-        event.putArray("summaryAdvisoryIssues");
-        event.put("summaryRepairAttemptCount", 0);
+                .put("resultSummary", resultSummary);
         event.put("summaryProvider", "deterministic-test");
         event.put("summaryProviderModel", "deterministic-test-model");
         event.put("summaryGeneratedAt", Instant.now().toString());
@@ -478,29 +442,13 @@ class ReportPlanningIntegrationTest {
         assertThat(jdbc.queryForObject("select count(*) from execution_artifact where id=?",
                 Long.class, artifactId)).isEqualTo(1L);
         assertThat(jdbc.queryForObject("""
-                select summary_evidence_json ->> 'schemaVersion'
-                  from execution_result where execution_id=?
-                """, String.class, executionId)).isEqualTo("2.0");
-        assertThat(jdbc.queryForObject("""
-                select summary_validation_status
-                  from execution_result where execution_id=?
-                """, String.class, executionId)).isEqualTo("ACCEPTED");
-        assertThat(jdbc.queryForObject("""
-                select jsonb_array_length(summary_validation_issues_json)
-                  from execution_result where execution_id=?
-                """, Integer.class, executionId)).isZero();
-        assertThat(jdbc.queryForObject("""
-                select summary_audit_json ->> 'schemaVersion'
-                  from execution_result where execution_id=?
-                """, String.class, executionId)).isEqualTo("2.0");
-        assertThat(jdbc.queryForObject("""
                 select summary_provider_model
                   from execution_result where execution_id=?
                 """, String.class, executionId)).isEqualTo("deterministic-test-model");
         assertThat(jdbc.queryForObject("""
-                select char_length(management_summary)
+                select char_length(result_summary)
                   from execution_result where execution_id=?
-                """, Integer.class, executionId)).isEqualTo(managementSummary.length());
+                """, Integer.class, executionId)).isEqualTo(resultSummary.length());
         mockMvc.perform(get("/api/executions/{id}/result", executionId).with(login()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.rowCount").value(123))
@@ -508,16 +456,12 @@ class ReportPlanningIntegrationTest {
                 .andExpect(jsonPath("$.artifact.downloadAvailable").doesNotExist())
                 .andExpect(jsonPath("$.artifact.jupyterAvailable").doesNotExist())
                 .andExpect(jsonPath("$.summaryStatus").value("COMPLETED"))
-                .andExpect(jsonPath("$.summaryValidationStatus").value("ACCEPTED"))
                 .andExpect(jsonPath("$.guidanceKey")
                         .value("result.guidance.governedPreview"));
         jdbc.update("""
                 update execution_result
-                   set summary_status='FAILED', management_summary=null,
-                       summary_validation_status='PROVIDER_FAILED',
-                       summary_validation_issues_json='["SUMMARY_PROVIDER_FAILED"]'::jsonb,
-                       summary_blocking_issues_json='["SUMMARY_PROVIDER_FAILED"]'::jsonb,
-                       summary_advisory_issues_json='[]'::jsonb
+                   set summary_status='FAILED', result_summary=null,
+                       summary_error_code='LLM_PROVIDER_UNAVAILABLE'
                  where execution_id=?
                 """, executionId);
         mockMvc.perform(get("/api/executions/{id}/result", executionId).with(login()))
@@ -525,8 +469,7 @@ class ReportPlanningIntegrationTest {
                 .andExpect(jsonPath("$.rowCount").value(123))
                 .andExpect(jsonPath("$.artifact.artifactId").value(artifactId.toString()))
                 .andExpect(jsonPath("$.summaryStatus").value("FAILED"))
-                .andExpect(jsonPath("$.summaryValidationStatus").value("PROVIDER_FAILED"))
-                .andExpect(jsonPath("$.managementSummary").doesNotExist());
+                .andExpect(jsonPath("$.resultSummary").doesNotExist());
     }
 
     @Test

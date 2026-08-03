@@ -132,7 +132,7 @@ test('result page renders bounded facts and role-aware Jupyter guidance', async 
         artifact: { artifactId: 'artifact-1', format: 'PARQUET', downloadAvailable: true, jupyterAvailable: true },
         guidanceKey: 'JUPYTER_AVAILABLE',
         summaryStatus: 'COMPLETED',
-        managementSummary: 'Revenue is concentrated in Marmara.'
+        resultSummary: 'Revenue is concentrated in Marmara.'
       }
     })
   );

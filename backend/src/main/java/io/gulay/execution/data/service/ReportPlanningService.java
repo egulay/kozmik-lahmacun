@@ -138,7 +138,8 @@ public class ReportPlanningService {
         val command = new ExecutionMessagingContracts.ExecutionCommand(
                 "1.0", UUID.randomUUID(), execution.getCorrelationId(), execution.getId(),
                 execution.getEntity().getId(), execution.getOwner().getId(), now,
-                execution.getExecutionType(), order,
+                execution.getExecutionType(), execution.getOriginalRequest(),
+                executionSchema(schema), order,
                 parse(execution.getAuthorizationSnapshot()),
                 parse(execution.getConfigurationSnapshot()));
         outboxRepository.save(ExecutionCommandOutboxModel.builder()
@@ -203,7 +204,7 @@ public class ReportPlanningService {
         val order = result.path("order");
         validateBinding(order, request, type);
         return persist(request, idempotencyKey, fingerprint, correlationId, owner.getId(),
-                roles, order, type);
+                roles, schema, order, type);
     }
 
     private ObjectNode planningRequest(
@@ -216,7 +217,12 @@ public class ReportPlanningService {
                 .put("userRequest", request.request()).put("requestedLanguage", request.language());
         val capabilities = root.putArray("capabilities");
         roles.stream().map(Enum::name).sorted().forEach(capabilities::add);
-        val authorized = root.putObject("authorizedSchema")
+        root.set("authorizedSchema", executionSchema(schema));
+        return root;
+    }
+
+    private ObjectNode executionSchema(EntityDtos.EntitySchemaResponse schema) {
+        val authorized = objectMapper.createObjectNode()
                 .put("entityId", schema.entityId().toString());
         val columns = authorized.putArray("columns");
         schema.columns().forEach(column -> {
@@ -226,7 +232,7 @@ public class ReportPlanningService {
             val values = item.putArray("categoricalValues");
             column.categoricalValues().forEach(values::add);
         });
-        return root;
+        return authorized;
     }
 
     private void validateBinding(JsonNode order, ExecutionDtos.CreateReportPlanRequest request,
@@ -247,7 +253,7 @@ public class ReportPlanningService {
     protected ExecutionDtos.ReportPlanResponse persist(
             ExecutionDtos.CreateReportPlanRequest request, String key, String fingerprint,
             String correlationId, UUID ownerId, Set<PlatformRole> roles,
-            JsonNode order, String type) {
+            EntityDtos.EntitySchemaResponse schema, JsonNode order, String type) {
         val now = Instant.now(clock);
         val execution = executionRepository.save(ExecutionRequestModel.builder()
                 .id(UUID.randomUUID()).owner(userRepository.getReferenceById(ownerId))
@@ -272,7 +278,8 @@ public class ReportPlanningService {
                 .occurredAt(now).build());
         val command = new ExecutionMessagingContracts.ExecutionCommand(
                 "1.0", UUID.randomUUID(), correlationId, execution.getId(),
-                request.entityId(), ownerId, now, type, order,
+                request.entityId(), ownerId, now, type, execution.getOriginalRequest(),
+                executionSchema(schema), order,
                 parse(execution.getAuthorizationSnapshot()),
                 parse(execution.getConfigurationSnapshot()));
         outboxRepository.save(ExecutionCommandOutboxModel.builder()

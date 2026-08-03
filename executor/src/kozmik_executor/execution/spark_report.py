@@ -223,7 +223,7 @@ class SparkReportExecutor:
     def _report_breakdown(
         order: ReportOrder, rows: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """Return aggregate result rows safe for management-summary generation."""
+        """Return aggregate result rows safe for result-summary generation."""
         allowed_fields = {
             *(
                 field for field in order.payload.group_by

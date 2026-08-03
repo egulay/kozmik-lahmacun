@@ -86,6 +86,7 @@ class ChatProvider(Protocol):
     async def stream(self, messages: list[dict[str, str]]) -> AsyncIterator[str]: ...
     async def classify(self, prompt: str) -> IntentType: ...
     async def complete_json(self, system_prompt: str, user_prompt: str) -> dict: ...
+    async def complete_text(self, system_prompt: str, user_prompt: str) -> str: ...
     async def health(self) -> bool: ...
 
     async def ensure_ready(self) -> None: ...
@@ -236,6 +237,45 @@ class OpenAiCompatibleProvider:
                     raise ProviderError("LLM_STRUCTURED_RESPONSE_INVALID") from exception
         raise ProviderError("LLM_PROVIDER_UNAVAILABLE")
 
+    async def complete_text(self, system_prompt: str, user_prompt: str) -> str:
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "stream": False,
+            **self._sampling_parameters(),
+        }
+        for attempt in range(self.config.max_retries + 1):
+            try:
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(self.config.timeout_seconds),
+                    headers=self._headers(),
+                    transport=self.transport,
+                ) as client:
+                    response = await client.post(
+                        f"{self.config.base_url.rstrip('/')}/chat/completions", json=payload
+                    )
+                    response.raise_for_status()
+                    content = response.json()["choices"][0]["message"]["content"]
+                    if not isinstance(content, str) or not content.strip():
+                        raise ValueError("provider returned empty text")
+                    return content.strip()
+            except (httpx.TimeoutException, httpx.NetworkError) as exception:
+                if attempt >= self.config.max_retries:
+                    raise ProviderError("LLM_PROVIDER_TIMEOUT", retryable=True) from exception
+                await asyncio.sleep(0.05 * (2**attempt))
+            except httpx.HTTPStatusError as exception:
+                status = exception.response.status_code
+                raise ProviderError(
+                    "LLM_PROVIDER_REQUEST_REJECTED",
+                    retryable=status == 429 or status >= 500,
+                ) from exception
+            except (ValueError, KeyError, IndexError, json.JSONDecodeError) as exception:
+                raise ProviderError("LLM_PROVIDER_INVALID_RESPONSE") from exception
+        raise ProviderError("LLM_PROVIDER_UNAVAILABLE")
+
     async def health(self) -> bool:
         try:
             await self.ensure_ready()
@@ -361,6 +401,14 @@ class DeterministicMockProvider:
         )):
             return IntentType.REPORT
         return IntentType.CONVERSATIONAL
+
+    async def complete_text(self, _system_prompt: str, user_prompt: str) -> str:
+        request = json.loads(user_prompt)
+        row_count = request.get("totalRowCount", 0)
+        language = request.get("requestedLanguage", "en")
+        if language == "tr":
+            return f"Hesaplanan sonuç {row_count} kayıt içeriyor."
+        return f"The calculated result contains {row_count} records."
 
     async def complete_json(self, system_prompt: str, user_prompt: str) -> dict:
         if "Translate only the supplied fixed policy" in system_prompt:

@@ -29,7 +29,7 @@
   import {
     formatDate,
     formatDisplayValue,
-    formatManagementSummary,
+    formatResultSummary,
     formatTemporalBucket,
     humanizeField
   } from '$lib/utils';
@@ -47,6 +47,14 @@
   let previewLoading = $state(false);
   let error = $state('');
   let loadSequence = 0;
+
+  function artifactStorageUri(value: ExecutionResult): string {
+    if (value.artifact.storageUri) return value.artifact.storageUri;
+    if (value.artifact.bucket && value.artifact.objectKey) {
+      return `s3://${value.artifact.bucket}/${value.artifact.objectKey}`;
+    }
+    return `s3://results/executions/${value.executionId}/${value.artifact.artifactId}.parquet`;
+  }
 
   $effect(() => {
     const executionId = $page.params.id;
@@ -703,7 +711,7 @@
     <Card.Header>
       <div class="min-w-0">
         <Card.Description>{$t('summary')}</Card.Description>
-        {#if result.managementSummary}<p class="pdf-narrative-content mt-1 w-full text-base leading-relaxed">{formatManagementSummary(result.managementSummary)}</p>
+        {#if result.resultSummary}<p class="pdf-narrative-content mt-1 w-full text-base leading-relaxed">{formatResultSummary(result.resultSummary)}</p>
         {:else if result.summaryStatus === 'FAILED'}
           <Alert.Root class="mt-1"><TriangleAlert /><Alert.Description>{$t('summaryFailed')}</Alert.Description></Alert.Root>
         {:else}<p class="mt-1 text-sm text-muted-foreground">{$t('summaryPending')}</p>{/if}
@@ -803,9 +811,18 @@
     <Card.Root>
       <Card.Header class="flex-row items-center gap-3">
         <span class="flex size-10 items-center justify-center rounded-md bg-muted"><Box /></span>
-        <div class="min-w-0 flex-1"><Card.Title class="truncate text-base">Parquet · {result.artifact.artifactId}</Card.Title><Card.Description>{$t('artifactGuidance')}</Card.Description></div>
+        <div class="min-w-0 flex-1">
+          <Card.Title class="truncate text-base">Parquet · {result.artifact.artifactId}</Card.Title>
+          <Card.Description>{$t('artifactGuidance')}</Card.Description>
+        </div>
       </Card.Header>
-      <Card.Content><p class="text-sm text-muted-foreground">{$t('reporterGuidance')}</p></Card.Content>
+      <Card.Content class="space-y-3">
+        <div>
+          <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{$t('artifactPath')}</p>
+          <p class="mt-1 break-all font-mono text-sm">{artifactStorageUri(result)}</p>
+        </div>
+        <p class="text-sm text-muted-foreground">{$t('reporterGuidance')}</p>
+      </Card.Content>
     </Card.Root>
   </section>
 
