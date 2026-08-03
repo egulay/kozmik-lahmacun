@@ -1,9 +1,11 @@
 import { get } from 'svelte/store';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  getWorkspaceView,
   initializeWorkspaceTabs,
   openWorkspaceTab,
   reconcileWorkspaceTabs,
+  setWorkspaceView,
   workspaceTabResourceId,
   workspaceTabs,
   type WorkspaceTab
@@ -26,6 +28,7 @@ describe('workspace tab reconciliation', () => {
   beforeEach(() => {
     sessionStorage.clear();
     workspaceTabs.set([]);
+    initializeWorkspaceTabs(crypto.randomUUID());
   });
 
   it('removes tabs whose authoritative resource no longer exists', async () => {
@@ -90,6 +93,7 @@ describe('workspace tab reconciliation', () => {
 
   it('clears every tab when the backend workspace generation changes', () => {
     initializeWorkspaceTabs('database-generation-1');
+    setWorkspaceView('result:one:en', { id: 'one' });
     openWorkspaceTab({
       pageId: 'entities',
       title: 'Data Entities',
@@ -106,5 +110,20 @@ describe('workspace tab reconciliation', () => {
     expect(get(workspaceTabs)).toEqual([]);
     expect(sessionStorage.getItem('kozmik-workspace-generation'))
       .toBe('database-generation-2');
+    expect(getWorkspaceView('result:one:en')).toBeUndefined();
+  });
+
+  it('keeps a bounded in-memory view cache for flicker-free tab revisits', () => {
+    setWorkspaceView('execution:one:en', { status: 'RUNNING' });
+
+    expect(getWorkspaceView<{ status: string }>('execution:one:en'))
+      .toEqual({ status: 'RUNNING' });
+
+    for (let index = 0; index < 24; index += 1) {
+      setWorkspaceView(`view:${index}`, index);
+    }
+
+    expect(getWorkspaceView('execution:one:en')).toBeUndefined();
+    expect(getWorkspaceView('view:23')).toBe(23);
   });
 });

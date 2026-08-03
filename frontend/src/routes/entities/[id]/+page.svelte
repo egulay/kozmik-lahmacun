@@ -1,6 +1,5 @@
 <script lang="ts">
   import { page } from '$app/stores';
-  import { onMount } from 'svelte';
   import { ArrowLeft, Database, LoaderCircle } from '@lucide/svelte';
   import { api } from '$lib/api';
   import { locale, statusLabel, t } from '$lib/i18n';
@@ -14,7 +13,7 @@
   import StatusBadge from '$lib/components/StatusBadge.svelte';
   import { DurableEventStream } from '$lib/sse';
   import ServerPagination from '$lib/components/ServerPagination.svelte';
-  import { openWorkspaceTab } from '$lib/workspace-tabs';
+  import { getWorkspaceView, openWorkspaceTab, setWorkspaceView } from '$lib/workspace-tabs';
 
   let entity = $state<EntitySummary | null>(null);
   let columns = $state<ColumnDefinition[]>([]);
@@ -32,25 +31,70 @@
   let ingestionStatus = $state('');
   let latestBatchRows = $state<number | null>(null);
   let lastCheckpoint = $state<string | null>(null);
+  let activeEntityId = '';
+  let loadSequence = 0;
   const STREAM_IDLE_COMPLETION_MS = 10_000;
+  type EntityView = {
+    entity: EntitySummary;
+    columns: ColumnDefinition[];
+    columnPage: number;
+    columnTotalElements: number;
+    columnTotalPages: number;
+    ingestionActive: boolean;
+    ingestionStatus: string;
+    latestBatchRows: number | null;
+    lastCheckpoint: string | null;
+  };
 
-  onMount(() => {
-    void load().then(connect);
+  $effect(() => {
+    const id = $page.params.id;
+    if (!id) return;
+    activeEntityId = id;
+    loadSequence += 1;
+    closeEntityResources();
+    const cached = getWorkspaceView<EntityView>(`entity:${id}:${$locale}`);
+    entity = cached?.entity ?? null;
+    columns = cached?.columns ?? [];
+    columnPage = cached?.columnPage ?? 0;
+    columnTotalElements = cached?.columnTotalElements ?? 0;
+    columnTotalPages = cached?.columnTotalPages ?? 0;
+    ingestionActive = cached?.ingestionActive ?? false;
+    ingestionStatus = cached?.ingestionStatus ?? '';
+    latestBatchRows = cached?.latestBatchRows ?? null;
+    lastCheckpoint = cached?.lastCheckpoint ?? null;
+    error = '';
+    loading = !cached;
+    void load(!cached, cached?.columnPage ?? 0, id).then(() => {
+      if (activeEntityId === id && entity?.id === id) connect(id);
+    });
     return () => {
-      stream?.close();
-      if (reloadTimer) clearTimeout(reloadTimer);
-      if (completionTimer) clearTimeout(completionTimer);
+      if (activeEntityId === id) closeEntityResources();
     };
   });
 
-  async function load(showLoading = true, targetColumnPage = columnPage) {
+  function closeEntityResources() {
+    stream?.close();
+    stream = undefined;
+    if (reloadTimer) clearTimeout(reloadTimer);
+    reloadTimer = undefined;
+    if (completionTimer) clearTimeout(completionTimer);
+    completionTimer = undefined;
+    activityHoldUntil = 0;
+  }
+
+  async function load(
+    showLoading = true,
+    targetColumnPage = columnPage,
+    id = activeEntityId
+  ) {
+    const sequence = ++loadSequence;
     if (showLoading) loading = true;
     try {
-      const id = $page.params.id!;
       const [loadedEntity, columnResponse] = await Promise.all([
         api.entity(id),
         api.entityColumns(id, targetColumnPage, columnSize)
       ]);
+      if (id !== activeEntityId || sequence !== loadSequence) return;
       entity = loadedEntity;
       openWorkspaceTab({
         entityId: loadedEntity.id,
@@ -67,9 +111,27 @@
       }
       latestBatchRows = loadedEntity.latestBatchRowCount ?? null;
       lastCheckpoint = loadedEntity.lastCheckpointAt ?? null;
+      setWorkspaceView<EntityView>(`entity:${id}:${$locale}`, {
+        entity: loadedEntity,
+        columns: columnResponse.items,
+        columnPage: columnResponse.page,
+        columnTotalElements: columnResponse.totalElements,
+        columnTotalPages: columnResponse.totalPages,
+        ingestionActive,
+        ingestionStatus,
+        latestBatchRows: loadedEntity.latestBatchRowCount ?? null,
+        lastCheckpoint: loadedEntity.lastCheckpointAt ?? null
+      });
       error = '';
-    } catch { error = $t('apiUnavailable'); }
-    finally { if (showLoading) loading = false; }
+    } catch {
+      if (id === activeEntityId && sequence === loadSequence) {
+        error = $t('apiUnavailable');
+      }
+    } finally {
+      if (showLoading && id === activeEntityId && sequence === loadSequence) {
+        loading = false;
+      }
+    }
   }
 
   function changeColumnSize(value: number) {
@@ -77,12 +139,14 @@
     void load(true, 0);
   }
 
-  function connect() {
-    const id = $page.params.id;
-    if (!id) return;
+  function connect(id: string) {
+    stream?.close();
     stream = new DurableEventStream(`/api/entities/${id}/ingestion-stream`, {
-      onReconnect: () => load(false),
+      onReconnect: () => {
+        if (activeEntityId === id) void load(false, columnPage, id);
+      },
       onEvent: (event, name) => {
+        if (activeEntityId !== id) return;
         let payload: Record<string, unknown> = {};
         try { payload = JSON.parse(event.data); } catch { return; }
         if (name === 'ingestion-failed') {
@@ -109,7 +173,7 @@
         ) {
           lastCheckpoint = payload.occurredAt;
         }
-        scheduleAuthoritativeReload();
+        scheduleAuthoritativeReload(id);
       }
     });
     stream.connect();
@@ -138,11 +202,11 @@
     }, STREAM_IDLE_COMPLETION_MS);
   }
 
-  function scheduleAuthoritativeReload() {
+  function scheduleAuthoritativeReload(id: string) {
     if (reloadTimer) return;
     reloadTimer = setTimeout(() => {
       reloadTimer = undefined;
-      void load(false);
+      if (activeEntityId === id) void load(false, columnPage, id);
     }, 1_000);
   }
 </script>

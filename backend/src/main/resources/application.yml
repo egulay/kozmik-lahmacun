@@ -112,6 +112,8 @@ management:
       enabled: true
 
 kozmik:
+  sse:
+    max-subscribers-per-stream: ${SSE_MAX_SUBSCRIBERS_PER_STREAM:10000}
   ingestion:
     system-keycloak-user-id: ${INGESTION_SYSTEM_KEYCLOAK_USER_ID:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3}
   execution:

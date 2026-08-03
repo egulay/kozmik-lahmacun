@@ -35,6 +35,7 @@ export type WorkspaceTab =
 
 const storageKey = 'kozmik-workspace-tabs';
 const generationStorageKey = 'kozmik-workspace-generation';
+const workspaceViewCache = new Map<string, unknown>();
 
 function restoreTabs(): WorkspaceTab[] {
   if (!browser) return [];
@@ -71,8 +72,27 @@ export function initializeWorkspaceTabs(workspaceGeneration: string) {
   const storedGeneration = sessionStorage.getItem(generationStorageKey);
   if (storedGeneration !== workspaceGeneration) {
     workspaceTabs.set([]);
+    workspaceViewCache.clear();
     sessionStorage.setItem(generationStorageKey, workspaceGeneration);
   }
+}
+
+export function getWorkspaceView<T>(key: string): T | undefined {
+  return workspaceViewCache.get(key) as T | undefined;
+}
+
+export function setWorkspaceView<T>(key: string, value: T): void {
+  workspaceViewCache.delete(key);
+  workspaceViewCache.set(key, value);
+  while (workspaceViewCache.size > 24) {
+    const oldest = workspaceViewCache.keys().next().value;
+    if (typeof oldest !== 'string') break;
+    workspaceViewCache.delete(oldest);
+  }
+}
+
+export function deleteWorkspaceView(key: string): void {
+  workspaceViewCache.delete(key);
 }
 
 export function openWorkspaceTab(tab: WorkspaceTab) {

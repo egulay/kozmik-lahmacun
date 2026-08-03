@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.springframework.web.server.ResponseStatusException;
@@ -15,21 +16,27 @@ import org.springframework.http.HttpStatus;
 
 @Component
 public class ChatStreamHub {
-    private static final int MAX_SUBSCRIBERS_PER_MESSAGE = 5;
     private final Map<UUID, List<Event>> events = new ConcurrentHashMap<>();
     private final Map<UUID, List<SseEmitter>> subscribers = new ConcurrentHashMap<>();
+    private final int maxSubscribers;
+
+    public ChatStreamHub(
+            @Value("${kozmik.sse.max-subscribers-per-stream:10000}") int maxSubscribers) {
+        this.maxSubscribers = maxSubscribers;
+    }
 
     public SseEmitter subscribe(UUID messageId, String lastEventId) {
         val emitter = new SseEmitter(300_000L);
         val values = subscribers.computeIfAbsent(
                 messageId, ignored -> new java.util.concurrent.CopyOnWriteArrayList<>());
-        if (values.size() >= MAX_SUBSCRIBERS_PER_MESSAGE) {
+        if (values.size() >= maxSubscribers) {
             throw new ResponseStatusException(
                     HttpStatus.TOO_MANY_REQUESTS, "SSE subscriber limit reached");
         }
         values.add(emitter);
         emitter.onCompletion(() -> remove(messageId, emitter));
         emitter.onTimeout(() -> remove(messageId, emitter));
+        emitter.onError(error -> remove(messageId, emitter));
         for (val event : events.getOrDefault(messageId, List.of())) {
             if (lastEventId == null || event.id().compareTo(lastEventId) > 0) {
                 send(emitter, event);

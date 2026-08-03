@@ -12,13 +12,14 @@ from kozmik_executor.execution.worker import (
 )
 
 
-def command(configuration=None) -> ExecutionCommand:
+def command(configuration=None, include_summary=True) -> ExecutionCommand:
     entity_id = uuid4()
     actor_id = uuid4()
     return ExecutionCommand.model_validate({
         "schemaVersion": "1.0", "eventId": str(uuid4()), "correlationId": "worker-test",
         "executionId": str(uuid4()), "entityId": str(entity_id), "actorUserId": str(actor_id),
         "occurredAt": datetime.now(timezone.utc).isoformat(), "executionType": "REPORT",
+        "includeSummary": include_summary,
         "authorization": {
             "actorUserId": str(actor_id),
 
@@ -97,6 +98,30 @@ def test_event_ledger_suppresses_completed_duplicate(tmp_path):
     assert ledger.completed(event_id) is True
 
 
+def test_worker_skips_summary_provider_when_summary_was_excluded():
+    statuses = []
+    results = []
+
+    class ExplainerThatMustNotRun:
+        async def explain(self, _command, _result):
+            raise AssertionError("summary provider must not be called")
+
+    async def status(event):
+        statuses.append(event)
+
+    async def result(event):
+        results.append(event)
+
+    worker = TrustedReportWorker(
+        status, result, FakeExecutor(), explainer=ExplainerThatMustNotRun())
+    asyncio.run(worker.execute(command(include_summary=False)))
+
+    assert results[0].summary_status == "SKIPPED"
+    assert results[0].result_summary is None
+    assert results[0].summary_provider == "NOT_REQUESTED"
+    assert "SUMMARIZING" not in [item.stage for item in statuses]
+
+
 def test_artifact_retention_is_executed_by_python_and_reports_success(tmp_path):
     class FakeMinio:
         def __init__(self):
@@ -118,7 +143,8 @@ def test_artifact_retention_is_executed_by_python_and_reports_success(tmp_path):
     command_value = command()
     retention = ArtifactRetentionCommand(
         **command_value.model_dump(exclude={
-            "execution_type", "original_request", "data_schema", "order", "authorization",
+            "execution_type", "original_request", "include_summary", "data_schema",
+            "order", "authorization",
             "configuration",
         }),
         operation="DELETE_ARTIFACT", artifact_id=uuid4(), bucket="results",

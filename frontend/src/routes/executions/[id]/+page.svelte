@@ -19,16 +19,24 @@
   import StateView from '$lib/components/StateView.svelte';
   import StatusBadge from '$lib/components/StatusBadge.svelte';
   import JsonDisplay from '$lib/components/JsonDisplay.svelte';
-  import { closeExecutionWorkspace, openWorkspaceTab } from '$lib/workspace-tabs';
+  import {
+    closeExecutionWorkspace,
+    deleteWorkspaceView,
+    getWorkspaceView,
+    openWorkspaceTab,
+    setWorkspaceView
+  } from '$lib/workspace-tabs';
   import DeleteExecutionButton from '$lib/components/DeleteExecutionButton.svelte';
   import PdfExportButton from '$lib/components/PdfExportButton.svelte';
   import ProgressStageIcon from '$lib/components/ProgressStageIcon.svelte';
   import MarkdownMessage from '$lib/components/MarkdownMessage.svelte';
   import ExecutionTypeIcon from '$lib/components/ExecutionTypeIcon.svelte';
 
-  let execution = $state<Execution | null>(null);
-  let localizedEntity = $state<EntitySummary | null>(null);
-  let loading = $state(true);
+  type ExecutionView = { execution: Execution; localizedEntity: EntitySummary | null };
+  const initialView = getWorkspaceView<ExecutionView>(`execution:${$page.params.id}:${$locale}`);
+  let execution = $state<Execution | null>(initialView?.execution ?? null);
+  let localizedEntity = $state<EntitySummary | null>(initialView?.localizedEntity ?? null);
+  let loading = $state(!initialView);
   let error = $state('');
   let connected = $state(false);
   let cancelling = $state(false);
@@ -96,6 +104,10 @@
       if ($page.params.id !== executionId || $locale !== selectedLocale) return;
       if (!applyExecution(loadedExecution)) return;
       localizedEntity = loadedEntity;
+      setWorkspaceView<ExecutionView>(`execution:${executionId}:${selectedLocale}`, {
+        execution: loadedExecution,
+        localizedEntity: loadedEntity
+      });
       openWorkspaceTab({
         executionId: loadedExecution.id,
         title: loadedExecution.originalRequest?.slice(0, 48)
@@ -241,6 +253,8 @@
 
   async function afterDelete() {
     if (!execution) return;
+    deleteWorkspaceView(`execution:${execution.id}:en`);
+    deleteWorkspaceView(`execution:${execution.id}:tr`);
     closeExecutionWorkspace(execution.id);
     await goto('/executions');
   }

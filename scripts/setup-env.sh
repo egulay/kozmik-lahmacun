@@ -57,6 +57,7 @@ if [[ -f "${target}" ]]; then
   append_secret_if_missing "LLM_MAX_CONTEXT_MESSAGES" "20"
   append_secret_if_missing "LLM_MAX_CONTEXT_CHARACTERS" "12000"
   append_secret_if_missing "EXECUTION_TIMEOUT_SECONDS" "7200"
+  append_secret_if_missing "SSE_MAX_SUBSCRIBERS_PER_STREAM" "10000"
   append_secret_if_missing "PYTHON_PLANNING_TIMEOUT_SECONDS" "660"
   append_secret_if_missing "PYTHON_CLASSIFICATION_TIMEOUT_SECONDS" "240"
   append_secret_if_missing "PYTHON_CHAT_STREAM_TIMEOUT_SECONDS" "240"

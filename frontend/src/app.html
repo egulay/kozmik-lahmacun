@@ -9,12 +9,11 @@
   <body data-sveltekit-preload-data="hover">
     <script>
       try {
-        const theme = localStorage.getItem('kozmik-theme-preference');
-        const dark =
-          theme === 'dark' ||
-          ((theme !== 'light' && theme !== 'dark') &&
-            matchMedia('(prefers-color-scheme: dark)').matches);
-        document.documentElement.classList.toggle('dark', dark);
+        localStorage.removeItem('kozmik-theme-preference');
+        document.documentElement.classList.toggle(
+          'dark',
+          matchMedia('(prefers-color-scheme: dark)').matches
+        );
       } catch {}
     </script>
     <div style="display: contents">%sveltekit.body%</div>

@@ -17,20 +17,28 @@
   import { Badge } from '$lib/components/ui/badge/index.js';
   import ServerPagination from '$lib/components/ServerPagination.svelte';
   import DeleteExecutionButton from '$lib/components/DeleteExecutionButton.svelte';
-  import { openWorkspaceTab } from '$lib/workspace-tabs';
+  import { getWorkspaceView, openWorkspaceTab, setWorkspaceView } from '$lib/workspace-tabs';
   import { DurableEventStream } from '$lib/sse';
   import ExecutionTypeIcon from '$lib/components/ExecutionTypeIcon.svelte';
 
-  let executions = $state<Execution[]>([]);
-  let loading = $state(true);
+  type ExecutionListView = {
+    executions: Execution[];
+    pageNumber: number;
+    pageSize: number;
+    totalElements: number;
+    totalPages: number;
+  };
+  const initialView = getWorkspaceView<ExecutionListView>(`page:executions:${$locale}`);
+  let executions = $state<Execution[]>(initialView?.executions ?? []);
+  let loading = $state(!initialView);
   let error = $state('');
   let unsupported = $state(false);
   let search = $state('');
   let status = $state('ALL');
-  let pageNumber = $state(0);
-  let pageSize = $state(20);
-  let totalElements = $state(0);
-  let totalPages = $state(0);
+  let pageNumber = $state(initialView?.pageNumber ?? 0);
+  let pageSize = $state(initialView?.pageSize ?? 20);
+  let totalElements = $state(initialView?.totalElements ?? 0);
+  let totalPages = $state(initialView?.totalPages ?? 0);
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
   let durationTimer: ReturnType<typeof setInterval> | undefined;
@@ -47,7 +55,7 @@
       title: $t('executions'),
       tabType: 'page'
     });
-    void load();
+    void load(pageNumber, !initialView);
     refreshTimer = setInterval(() => {
       void load(pageNumber, false);
       void refreshExpandedStages();
@@ -80,6 +88,15 @@
       pageNumber = response.page;
       totalElements = response.totalElements;
       totalPages = response.totalPages;
+      if (status === 'ALL' && search === '') {
+        setWorkspaceView<ExecutionListView>(`page:executions:${$locale}`, {
+          executions: response.items,
+          pageNumber: response.page,
+          pageSize,
+          totalElements: response.totalElements,
+          totalPages: response.totalPages
+        });
+      }
       syncStreams(response.items);
     } catch (cause) {
       if (cause instanceof ApiError && [404, 405].includes(cause.status)) unsupported = true;
@@ -345,7 +362,11 @@
                       />
                       <div class="min-w-0 flex-1">
                         <p class="text-xs text-muted-foreground">{$t('resultAvailable')}</p>
-                        <Button href={`/results/${item.id}`} variant="link" class="h-auto max-w-full whitespace-normal break-words p-0 text-left">
+                        <Button
+                          href={`/results/${item.id}`}
+                          variant="link"
+                          class="h-auto max-w-full whitespace-normal break-words p-0 text-left"
+                        >
                           {item.originalRequest ?? item.id}
                         </Button>
                       </div>

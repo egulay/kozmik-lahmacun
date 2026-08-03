@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class ExplanationOutcome(ContractModel):
-    status: Literal["COMPLETED", "FAILED"]
+    status: Literal["COMPLETED", "FAILED", "SKIPPED"]
     text: str | None = None
     provider: str
     provider_model: str

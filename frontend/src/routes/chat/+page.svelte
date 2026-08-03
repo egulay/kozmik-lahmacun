@@ -22,7 +22,9 @@
   import * as Tooltip from '$lib/components/ui/tooltip/index.js';
   import {
     closeWorkspaceTab,
+    getWorkspaceView,
     openWorkspaceTab,
+    setWorkspaceView,
     workspaceTabs
   } from '$lib/workspace-tabs';
 
@@ -194,10 +196,15 @@
       : sessionStorage.getItem(`${draftPrefix}${id}`) ?? '';
     stream?.close();
     liveMessage = null;
-    messagePage = 0;
-    messageLast = false;
+    const cached = getWorkspaceView<{
+      messages: ChatMessage[];
+      page: number;
+      last: boolean;
+    }>(`chat:${id}`);
+    messagePage = cached?.page ?? 0;
+    messageLast = cached?.last ?? false;
     messageLoadingMore = false;
-    messages = [];
+    messages = cached?.messages ?? [];
     try {
       if (updateLocation && $page.url.searchParams.get('thread') !== id) {
         await goto(`/chat?thread=${encodeURIComponent(id)}`);
@@ -207,6 +214,11 @@
       messages = response.items;
       messagePage = response.page;
       messageLast = response.last;
+      setWorkspaceView(`chat:${id}`, {
+        messages: response.items,
+        page: response.page,
+        last: response.last
+      });
       await scrollToLatest();
       const pending = [...messages].reverse().find((item) =>
         ['PENDING', 'STREAMING'].includes(item.status)

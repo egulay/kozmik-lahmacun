@@ -12,7 +12,8 @@ public final class ExecutionMessagingContracts {
     public record ExecutionCommand(
             String schemaVersion, UUID eventId, String correlationId, UUID executionId,
             UUID entityId, UUID actorUserId, Instant occurredAt, String executionType,
-            String originalRequest, JsonNode dataSchema, JsonNode order, JsonNode authorization,
+            String originalRequest, boolean includeSummary, JsonNode dataSchema,
+            JsonNode order, JsonNode authorization,
             JsonNode configuration) {
     }
 

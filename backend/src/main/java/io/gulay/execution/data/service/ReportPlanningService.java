@@ -139,6 +139,7 @@ public class ReportPlanningService {
                 "1.0", UUID.randomUUID(), execution.getCorrelationId(), execution.getId(),
                 execution.getEntity().getId(), execution.getOwner().getId(), now,
                 execution.getExecutionType(), execution.getOriginalRequest(),
+                SummaryPreference.include(execution.getOriginalRequest()),
                 executionSchema(schema), order,
                 parse(execution.getAuthorizationSnapshot()),
                 parse(execution.getConfigurationSnapshot()));
@@ -279,6 +280,7 @@ public class ReportPlanningService {
         val command = new ExecutionMessagingContracts.ExecutionCommand(
                 "1.0", UUID.randomUUID(), correlationId, execution.getId(),
                 request.entityId(), ownerId, now, type, execution.getOriginalRequest(),
+                SummaryPreference.include(execution.getOriginalRequest()),
                 executionSchema(schema), order,
                 parse(execution.getAuthorizationSnapshot()),
                 parse(execution.getConfigurationSnapshot()));

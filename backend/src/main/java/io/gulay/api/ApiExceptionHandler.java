@@ -18,6 +18,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.server.ResponseStatusException;
 @RestControllerAdvice
 @RequiredArgsConstructor
 @Slf4j
@@ -79,6 +80,18 @@ public class ApiExceptionHandler {
         warn("REPORT_ORDER_INVALID", exception);
         return error(HttpStatus.UNPROCESSABLE_CONTENT, "REPORT_ORDER_INVALID",
                 exception.getMessage(), List.of());
+    }
+
+    @ExceptionHandler(ResponseStatusException.class)
+    ResponseEntity<ApiError> responseStatus(ResponseStatusException exception) {
+        val status = HttpStatus.valueOf(exception.getStatusCode().value());
+        val code = status == HttpStatus.TOO_MANY_REQUESTS
+                ? "SSE_SUBSCRIBER_LIMIT_REACHED"
+                : "REQUEST_REJECTED";
+        warn(code, exception);
+        return error(status, code,
+                exception.getReason() == null ? "The request was rejected" : exception.getReason(),
+                List.of());
     }
 
     @ExceptionHandler(Exception.class)

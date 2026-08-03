@@ -21,6 +21,7 @@ class EventEnvelope(ContractModel):
 class ExecutionCommand(EventEnvelope):
     execution_type: Literal["REPORT", "ML"]
     original_request: str | None = Field(default=None, min_length=1, max_length=4_000)
+    include_summary: bool = True
     data_schema: dict[str, Any] | None = None
     order: ReportOrder | MlOrder
     authorization: dict[str, Any]
@@ -77,7 +78,7 @@ class ExecutionResultNotification(EventEnvelope):
     warnings: list[dict[str, Any]] = Field(max_length=20)
     artifact: dict[str, Any]
     model_artifact: dict[str, Any] | None = None
-    summary_status: Literal["COMPLETED", "FAILED"]
+    summary_status: Literal["COMPLETED", "FAILED", "SKIPPED"]
     result_summary: str | None = None
     summary_provider: str
     summary_provider_model: str

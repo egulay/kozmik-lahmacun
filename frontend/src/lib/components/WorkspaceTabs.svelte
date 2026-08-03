@@ -21,6 +21,7 @@
   import * as Tabs from './ui/tabs/index.js';
   import * as Tooltip from './ui/tooltip/index.js';
   import ExecutionTypeIcon from './ExecutionTypeIcon.svelte';
+  import { preloadWorkspaceTab } from '$lib/workspace-preload';
 
   const activeValue = $derived(
     $page.url.pathname === '/chat' && $page.url.searchParams.get('thread')
@@ -41,6 +42,7 @@
         ? `result:${$page.params.id}`
         : ''
   );
+  let navigatingTo = $state('');
 
   function value(tab: WorkspaceTab) {
     return workspaceTabKey(tab);
@@ -60,6 +62,19 @@
 
   function title(tab: WorkspaceTab) {
     return tab.tabType === 'page' ? $t(tab.pageId) : tab.title;
+  }
+
+  async function select(nextValue: string) {
+    if (!nextValue || nextValue === activeValue || nextValue === navigatingTo) return;
+    const tab = $workspaceTabs.find((item) => value(item) === nextValue);
+    if (!tab) return;
+    navigatingTo = nextValue;
+    try {
+      await preloadWorkspaceTab(tab).catch(() => undefined);
+      await goto(href(tab), { noScroll: true, keepFocus: true });
+    } finally {
+      navigatingTo = '';
+    }
   }
 
   async function close(event: MouseEvent, tab: WorkspaceTab) {
@@ -82,6 +97,7 @@
 {#if $workspaceTabs.length}
   <Tabs.Root
     value={activeValue}
+    onValueChange={select}
     class="w-full min-w-0 overflow-hidden border-b px-4 pt-2"
     aria-label={$t('openExecutions')}
   >
@@ -97,7 +113,6 @@
                       {...props}
                       value={value(tab)}
                       class="max-w-52 gap-2"
-                      onclick={() => goto(href(tab))}
                     >
                       {#if tab.tabType === 'chat'}
                         <MessageSquareText />

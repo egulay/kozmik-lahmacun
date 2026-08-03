@@ -20,7 +20,7 @@ from .models import (
 from kozmik_executor.lifecycle import lifecycle_coordinator
 from .spark_report import SparkReportExecutor
 from .spark_ml import SparkMlExecutor
-from .explanation import ResultExplainer
+from .explanation import ExplanationOutcome, ResultExplainer
 from .failure_explanation import FailureExplainer, SanitizedFailure
 from .dataset import GovernedDatasetResolver
 from kozmik_executor.planning.ml import ALGORITHM_REGISTRY
@@ -215,8 +215,15 @@ class TrustedReportWorker:
             raise asyncio.CancelledError
         await self._status(
             command, "WRITING_RESULTS", "RUNNING", 80, "EXECUTION_WRITING_RESULTS")
-        await self._status(command, "SUMMARIZING", "RUNNING", 90, "EXECUTION_SUMMARIZING")
-        explanation = await self.explainer.explain(command, result)
+        if command.include_summary:
+            await self._status(
+                command, "SUMMARIZING", "RUNNING", 90, "EXECUTION_SUMMARIZING")
+            explanation = await self.explainer.explain(command, result)
+        else:
+            explanation = ExplanationOutcome(
+                status="SKIPPED", provider="NOT_REQUESTED",
+                providerModel="NOT_REQUESTED", generatedAt=datetime.now(timezone.utc),
+            )
         result.pop("summaryFacts", None)
         result["summaryStatus"] = explanation.status
         result["resultSummary"] = explanation.text

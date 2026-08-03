@@ -59,7 +59,9 @@
       totalPages = response.totalPages;
       error = '';
     } catch { error = $t('apiUnavailable'); }
-    finally { loading = false; }
+    finally {
+      loading = false;
+    }
   }
 
   function open(user: ManagedUser, action: typeof dialog) {

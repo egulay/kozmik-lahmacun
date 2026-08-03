@@ -187,7 +187,7 @@ public class ExecutionEventConsumer {
                 || event.kpis().toString().length() > 20_000
                 || event.charts().toString().length() > 100_000
                 || event.warnings().toString().length() > 20_000
-                || !Set.of("COMPLETED", "FAILED").contains(event.summaryStatus())
+                || !Set.of("COMPLETED", "FAILED", "SKIPPED").contains(event.summaryStatus())
                 || invalidAuditText(event.summaryProvider(), 100)
                 || invalidAuditText(event.summaryProviderModel(), 200)
                 || event.summaryGeneratedAt() == null
@@ -197,7 +197,11 @@ public class ExecutionEventConsumer {
                 && event.summaryErrorCode() != null
                 || "FAILED".equals(event.summaryStatus())
                 && (event.resultSummary() != null
-                || invalidAuditText(event.summaryErrorCode(), 100))) {
+                || invalidAuditText(event.summaryErrorCode(), 100))
+                || "SKIPPED".equals(event.summaryStatus())
+                && (event.resultSummary() != null || event.summaryErrorCode() != null
+                || !"NOT_REQUESTED".equals(event.summaryProvider())
+                || !"NOT_REQUESTED".equals(event.summaryProviderModel()))) {
             throw new IllegalArgumentException("Unsafe execution result event");
         }
         if (processed.existsById(event.eventId())) {

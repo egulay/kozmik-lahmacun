@@ -8,6 +8,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.springframework.web.server.ResponseStatusException;
@@ -15,13 +16,18 @@ import org.springframework.http.HttpStatus;
 
 @Component
 public class ExecutionEventHub {
-    private static final int MAX_SUBSCRIBERS_PER_EXECUTION = 10;
     private final Map<UUID, CopyOnWriteArrayList<SseEmitter>> emitters = new ConcurrentHashMap<>();
+    private final int maxSubscribers;
+
+    public ExecutionEventHub(
+            @Value("${kozmik.sse.max-subscribers-per-stream:10000}") int maxSubscribers) {
+        this.maxSubscribers = maxSubscribers;
+    }
 
     public SseEmitter subscribe(UUID executionId) {
         val values = emitters.computeIfAbsent(
                 executionId, ignored -> new CopyOnWriteArrayList<>());
-        if (values.size() >= MAX_SUBSCRIBERS_PER_EXECUTION) {
+        if (values.size() >= maxSubscribers) {
             throw new ResponseStatusException(
                     HttpStatus.TOO_MANY_REQUESTS, "SSE subscriber limit reached");
         }

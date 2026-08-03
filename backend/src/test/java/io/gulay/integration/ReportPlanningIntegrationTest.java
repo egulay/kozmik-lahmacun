@@ -470,6 +470,17 @@ class ReportPlanningIntegrationTest {
                 .andExpect(jsonPath("$.artifact.artifactId").value(artifactId.toString()))
                 .andExpect(jsonPath("$.summaryStatus").value("FAILED"))
                 .andExpect(jsonPath("$.resultSummary").doesNotExist());
+        jdbc.update("""
+                update execution_result
+                   set summary_status='SKIPPED', result_summary=null,
+                       summary_provider='NOT_REQUESTED',
+                       summary_provider_model='NOT_REQUESTED', summary_error_code=null
+                 where execution_id=?
+                """, executionId);
+        mockMvc.perform(get("/api/executions/{id}/result", executionId).with(login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.summaryStatus").value("SKIPPED"))
+                .andExpect(jsonPath("$.resultSummary").doesNotExist());
     }
 
     @Test

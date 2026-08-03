@@ -10,19 +10,27 @@
   import StatusBadge from '$lib/components/StatusBadge.svelte';
   import { DurableEventStream } from '$lib/sse';
   import ServerPagination from '$lib/components/ServerPagination.svelte';
-  import { openWorkspaceTab } from '$lib/workspace-tabs';
+  import { getWorkspaceView, openWorkspaceTab, setWorkspaceView } from '$lib/workspace-tabs';
 
-  let entities = $state<EntitySummary[]>([]);
-  let loading = $state(true);
+  type EntityListView = {
+    entities: EntitySummary[];
+    pageNumber: number;
+    pageSize: number;
+    totalElements: number;
+    totalPages: number;
+  };
+  const initialView = getWorkspaceView<EntityListView>(`page:entities:${$locale}`);
+  let entities = $state<EntitySummary[]>(initialView?.entities ?? []);
+  let loading = $state(!initialView);
   let error = $state('');
   let stream: DurableEventStream | undefined;
   let reloadTimer: ReturnType<typeof setTimeout> | undefined;
   const completionTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let activeStreamEntities = $state<Record<string, boolean>>({});
-  let pageNumber = $state(0);
-  let pageSize = $state(20);
-  let totalElements = $state(0);
-  let totalPages = $state(0);
+  let pageNumber = $state(initialView?.pageNumber ?? 0);
+  let pageSize = $state(initialView?.pageSize ?? 20);
+  let totalElements = $state(initialView?.totalElements ?? 0);
+  let totalPages = $state(initialView?.totalPages ?? 0);
 
   onMount(() => {
     openWorkspaceTab({
@@ -30,7 +38,7 @@
       title: $t('entities'),
       tabType: 'page'
     });
-    void load().then(connect);
+    void load(!initialView, pageNumber).then(connect);
     return () => {
       stream?.close();
       if (reloadTimer) clearTimeout(reloadTimer);
@@ -51,10 +59,19 @@
       pageNumber = response.page;
       totalElements = response.totalElements;
       totalPages = response.totalPages;
+      setWorkspaceView<EntityListView>(`page:entities:${$locale}`, {
+        entities,
+        pageNumber: response.page,
+        pageSize,
+        totalElements: response.totalElements,
+        totalPages: response.totalPages
+      });
       error = '';
     }
     catch { error = $t('apiUnavailable'); }
-    finally { if (showLoading) loading = false; }
+    finally {
+      if (showLoading) loading = false;
+    }
   }
 
   function changeSize(value: number) {

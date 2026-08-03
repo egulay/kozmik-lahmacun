@@ -9,6 +9,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
@@ -16,14 +17,19 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @Component
 public class IngestionEventHub {
-    private static final int MAX_SUBSCRIBERS_PER_ENTITY = 10;
     private final Map<UUID, CopyOnWriteArrayList<SseEmitter>> subscribers =
             new ConcurrentHashMap<>();
     private final CopyOnWriteArrayList<SseEmitter> globalSubscribers =
             new CopyOnWriteArrayList<>();
+    private final int maxSubscribers;
+
+    public IngestionEventHub(
+            @Value("${kozmik.sse.max-subscribers-per-stream:10000}") int maxSubscribers) {
+        this.maxSubscribers = maxSubscribers;
+    }
 
     public SseEmitter subscribeAll() {
-        if (globalSubscribers.size() >= 50) {
+        if (globalSubscribers.size() >= maxSubscribers) {
             throw new ResponseStatusException(
                     HttpStatus.TOO_MANY_REQUESTS, "SSE subscriber limit reached");
         }
@@ -38,7 +44,7 @@ public class IngestionEventHub {
     public SseEmitter subscribe(UUID entityId) {
         val entitySubscribers = subscribers.computeIfAbsent(
                 entityId, ignored -> new CopyOnWriteArrayList<>());
-        if (entitySubscribers.size() >= MAX_SUBSCRIBERS_PER_ENTITY) {
+        if (entitySubscribers.size() >= maxSubscribers) {
             throw new ResponseStatusException(
                     HttpStatus.TOO_MANY_REQUESTS, "SSE subscriber limit reached");
         }

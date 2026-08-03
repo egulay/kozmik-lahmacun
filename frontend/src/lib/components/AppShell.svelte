@@ -79,6 +79,7 @@
     { href: '/admin/users', label: 'users' as const, icon: Users }
   ];
 
+
   $effect(() => {
     dark = document.documentElement.classList.contains('dark');
   });
@@ -114,16 +115,12 @@
   });
 
   function applyPreferredTheme() {
-    const preference = localStorage.getItem('kozmik-theme-preference');
-    dark =
-      preference === 'dark' ||
-      ((preference !== 'light' && preference !== 'dark') && Boolean(systemTheme?.matches));
+    localStorage.removeItem('kozmik-theme-preference');
+    dark = Boolean(systemTheme?.matches);
     document.documentElement.classList.toggle('dark', dark);
   }
 
   function applySystemTheme(event: MediaQueryListEvent) {
-    const preference = localStorage.getItem('kozmik-theme-preference');
-    if (preference === 'light' || preference === 'dark') return;
     dark = event.matches;
     document.documentElement.classList.toggle('dark', dark);
   }
@@ -329,7 +326,6 @@
   function toggleTheme() {
     dark = !dark;
     document.documentElement.classList.toggle('dark', dark);
-    localStorage.setItem('kozmik-theme-preference', dark ? 'dark' : 'light');
   }
 
   function active(href: string) {
@@ -680,7 +676,7 @@
     <div class="pdf-navigation-tabs w-full min-w-0">
       <WorkspaceTabs />
     </div>
-    <main id="main-content" tabindex="-1" class="w-full min-h-0 min-w-0 max-w-screen-2xl flex-1 overflow-y-auto overscroll-contain p-4 md:p-6">{@render children()}</main>
+    <main id="main-content" tabindex="-1" class="workspace-content w-full min-h-0 min-w-0 max-w-screen-2xl flex-1 overflow-y-auto overscroll-contain p-4 md:p-6">{@render children()}</main>
   </Sidebar.Inset>
 </Sidebar.Provider>
 

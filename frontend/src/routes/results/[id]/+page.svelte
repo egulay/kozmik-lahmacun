@@ -18,7 +18,13 @@
   import ChartView from '$lib/components/ChartView.svelte';
   import StatusBadge from '$lib/components/StatusBadge.svelte';
   import JsonDisplay from '$lib/components/JsonDisplay.svelte';
-  import { closeExecutionWorkspace, openWorkspaceTab } from '$lib/workspace-tabs';
+  import {
+    closeExecutionWorkspace,
+    deleteWorkspaceView,
+    getWorkspaceView,
+    openWorkspaceTab,
+    setWorkspaceView
+  } from '$lib/workspace-tabs';
   import DeleteExecutionButton from '$lib/components/DeleteExecutionButton.svelte';
   import PdfExportButton from '$lib/components/PdfExportButton.svelte';
   import ServerPagination from '$lib/components/ServerPagination.svelte';
@@ -34,16 +40,28 @@
     humanizeField
   } from '$lib/utils';
 
-  let result = $state<ExecutionResult | null>(null);
-  let previewData = $state<unknown>(null);
-  let previewPage = $state(0);
-  let previewSize = $state(20);
-  let previewTotalElements = $state(0);
-  let previewTotalPages = $state(0);
-  let execution = $state<Execution | null>(null);
-  let localizedEntity = $state<EntitySummary | null>(null);
-  let localizedColumns = $state<ColumnDefinition[]>([]);
-  let loading = $state(true);
+  type ResultView = {
+    result: ExecutionResult | null;
+    previewData: unknown;
+    previewPage: number;
+    previewSize: number;
+    previewTotalElements: number;
+    previewTotalPages: number;
+    execution: Execution;
+    localizedEntity: EntitySummary | null;
+    localizedColumns: ColumnDefinition[];
+  };
+  const initialView = getWorkspaceView<ResultView>(`result:${$page.params.id}:${$locale}`);
+  let result = $state<ExecutionResult | null>(initialView?.result ?? null);
+  let previewData = $state<unknown>(initialView?.previewData ?? null);
+  let previewPage = $state(initialView?.previewPage ?? 0);
+  let previewSize = $state(initialView?.previewSize ?? 20);
+  let previewTotalElements = $state(initialView?.previewTotalElements ?? 0);
+  let previewTotalPages = $state(initialView?.previewTotalPages ?? 0);
+  let execution = $state<Execution | null>(initialView?.execution ?? null);
+  let localizedEntity = $state<EntitySummary | null>(initialView?.localizedEntity ?? null);
+  let localizedColumns = $state<ColumnDefinition[]>(initialView?.localizedColumns ?? []);
+  let loading = $state(!initialView);
   let previewLoading = $state(false);
   let error = $state('');
   let loadSequence = 0;
@@ -64,7 +82,8 @@
 
   async function load(executionId: string, _selectedLocale = $locale) {
     const sequence = ++loadSequence;
-    loading = true;
+    const replacingView = execution?.id !== executionId;
+    if (replacingView) loading = true;
     error = '';
     try {
       const loadedExecution = await api.execution(executionId);
@@ -85,6 +104,17 @@
       execution = loadedExecution;
       localizedEntity = loadedEntity;
       localizedColumns = loadedSchema?.columns ?? [];
+      setWorkspaceView<ResultView>(`result:${executionId}:${_selectedLocale}`, {
+        result: loadedResult,
+        previewData: loadedResult?.preview ?? null,
+        previewPage: loadedResult?.previewPage ?? 0,
+        previewSize: loadedResult?.previewSize ?? 20,
+        previewTotalElements: loadedResult?.previewTotalElements ?? 0,
+        previewTotalPages: loadedResult?.previewTotalPages ?? 0,
+        execution: loadedExecution,
+        localizedEntity: loadedEntity,
+        localizedColumns: loadedSchema?.columns ?? []
+      });
       openWorkspaceTab({
         executionId: loadedExecution.id,
         title: loadedExecution.originalRequest?.slice(0, 48)
@@ -95,17 +125,19 @@
       });
     } catch {
       if (sequence !== loadSequence || $page.params.id !== executionId) return;
-      result = null;
-      previewData = null;
-      previewPage = 0;
-      previewTotalElements = 0;
-      previewTotalPages = 0;
-      execution = null;
-      localizedEntity = null;
-      localizedColumns = [];
+      if (replacingView) {
+        result = null;
+        previewData = null;
+        previewPage = 0;
+        previewTotalElements = 0;
+        previewTotalPages = 0;
+        execution = null;
+        localizedEntity = null;
+        localizedColumns = [];
+      }
       error = $t('apiUnavailable');
     } finally {
-      if (sequence === loadSequence) loading = false;
+      if (sequence === loadSequence && replacingView) loading = false;
     }
   }
 
@@ -587,6 +619,10 @@
 
   async function afterDelete() {
     if (!execution) return;
+    deleteWorkspaceView(`result:${execution.id}:en`);
+    deleteWorkspaceView(`result:${execution.id}:tr`);
+    deleteWorkspaceView(`execution:${execution.id}:en`);
+    deleteWorkspaceView(`execution:${execution.id}:tr`);
     closeExecutionWorkspace(execution.id);
     await goto('/results');
   }
@@ -707,6 +743,7 @@
       <Alert.Description>{$t('emptyExecutionResultBody')}</Alert.Description>
     </Alert.Root>
   {:else}
+  {#if result.summaryStatus !== 'SKIPPED'}
   <Card.Root class="mb-4 pdf-narrative-card">
     <Card.Header>
       <div class="min-w-0">
@@ -718,6 +755,7 @@
       </div>
     </Card.Header>
   </Card.Root>
+  {/if}
 
   {#if warnings.length}
     <section class="pdf-exclude mb-4" aria-labelledby="warnings-title">

@@ -16,16 +16,24 @@
   import StatusBadge from '$lib/components/StatusBadge.svelte';
   import ServerPagination from '$lib/components/ServerPagination.svelte';
   import DeleteExecutionButton from '$lib/components/DeleteExecutionButton.svelte';
-  import { openWorkspaceTab } from '$lib/workspace-tabs';
+  import { getWorkspaceView, openWorkspaceTab, setWorkspaceView } from '$lib/workspace-tabs';
 
-  let results = $state<Execution[]>([]);
-  let loading = $state(true);
+  type ResultListView = {
+    results: Execution[];
+    pageNumber: number;
+    pageSize: number;
+    totalElements: number;
+    totalPages: number;
+  };
+  const initialView = getWorkspaceView<ResultListView>(`page:results:${$locale}`);
+  let results = $state<Execution[]>(initialView?.results ?? []);
+  let loading = $state(!initialView);
   let error = $state('');
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
-  let pageNumber = $state(0);
-  let pageSize = $state(20);
-  let totalElements = $state(0);
-  let totalPages = $state(0);
+  let pageNumber = $state(initialView?.pageNumber ?? 0);
+  let pageSize = $state(initialView?.pageSize ?? 20);
+  let totalElements = $state(initialView?.totalElements ?? 0);
+  let totalPages = $state(initialView?.totalPages ?? 0);
   let search = $state('');
   let status = $state('ALL');
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -36,7 +44,7 @@
       title: $t('results'),
       tabType: 'page'
     });
-    void load();
+    void load(!initialView, pageNumber);
     refreshTimer = setInterval(() => void load(false), 5_000);
     window.addEventListener('focus', focusRefresh);
     return () => {
@@ -62,6 +70,15 @@
       pageNumber = response.page;
       totalElements = response.totalElements;
       totalPages = response.totalPages;
+      if (status === 'ALL' && search === '') {
+        setWorkspaceView<ResultListView>(`page:results:${$locale}`, {
+          results: response.items,
+          pageNumber: response.page,
+          pageSize,
+          totalElements: response.totalElements,
+          totalPages: response.totalPages
+        });
+      }
       error = '';
     } catch {
       error = $t('apiUnavailable');
