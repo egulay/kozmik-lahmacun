@@ -4,6 +4,7 @@ import lombok.val;
 
 import tools.jackson.databind.ObjectMapper;
 import io.gulay.entity.data.repository.BusinessEntityRepository;
+import io.gulay.entity.data.model.EntityStatus;
 import io.gulay.ingestion.data.model.ImportJobModel;
 import io.gulay.ingestion.data.model.ImportStatusHistoryModel;
 import io.gulay.ingestion.data.repository.ImportJobRepository;
@@ -58,13 +59,16 @@ public class IngestionEventConsumer {
                 || event.sourceReference() == null || event.sourceReference().length() > 1200
                 || event.errorMessage() != null && event.errorMessage().length() > 1000
                 || event.refinedObjectKey() != null && !event.refinedObjectKey().matches(
-                "^entities/" + event.entityId() + "/imports/[A-Za-z0-9._/-]{1,700}$")) {
+                "^entities/" + event.entityId()
+                        + "/dataset/part-file-[A-Za-z0-9-]{36}\\.parquet$")) {
             throw new IllegalArgumentException("Unsafe ingestion status event");
         }
         if (history.existsByEventId(event.eventId())) return;
-        val job = jobs.findById(event.importId()).orElseGet(() -> jobs.save(ImportJobModel.builder()
+        val existingJob = jobs.findById(event.importId());
+        val job = existingJob.orElseGet(() -> jobs.save(ImportJobModel.builder()
                 .id(event.importId()).sourceEventId(event.sourceEventId())
-                .entity(entities.findById(event.entityId())
+                .entity(entities.findById(event.entityId()).filter(
+                                entity -> entity.getStatus() == EntityStatus.ACTIVE)
                         .orElseThrow(() -> new IllegalArgumentException("Unknown entity")))
                 .sourceType(event.sourceType()).sourceReference(event.sourceReference())
                 .status("RECEIVED").createdAt(Instant.now(clock)).build()));

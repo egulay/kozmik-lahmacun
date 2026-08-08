@@ -38,3 +38,4 @@ SET search_path TO kozmik_lahmacun;
 \ir db/migration/V29__simplify_result_summary.sql
 \ir db/migration/V30__optional_result_summary.sql
 \ir db/migration/V31__allow_skipped_result_summary_status.sql
+\ir db/migration/V32__durable_entity_deletion.sql

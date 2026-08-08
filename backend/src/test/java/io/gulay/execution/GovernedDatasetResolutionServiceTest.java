@@ -54,13 +54,15 @@ class GovernedDatasetResolutionServiceTest {
         when(dataset.getStatus()).thenReturn("COMPLETED");
         when(dataset.getRefinedBucket()).thenReturn("refined");
         when(dataset.getRefinedObjectKey()).thenReturn(
-                "entities/" + entityId + "/imports/" + importId
-                        + "/data.parquet");
+                "entities/" + entityId + "/dataset/part-file-" + importId
+                        + ".parquet");
         when(dataset.getRowCount()).thenReturn(125L);
         when(imports
                 .findFirstByEntityIdAndStatusAndRefinedBucketIsNotNullAndRefinedObjectKeyIsNotNullOrderByCompletedAtDesc(
                         entityId, "COMPLETED"))
                 .thenReturn(Optional.of(dataset));
+        when(imports.completedRows(entityId)).thenReturn(125L);
+        when(streams.completedRows(entityId)).thenReturn(0L);
 
         val response = new GovernedDatasetResolutionService(
                 executions, bindings, imports, streamBindings, streams,
@@ -70,7 +72,8 @@ class GovernedDatasetResolutionServiceTest {
         assertThat(response.executionId()).isEqualTo(executionId);
         assertThat(response.entityId()).isEqualTo(entityId);
         assertThat(response.importId()).isEqualTo(importId);
-        assertThat(response.format()).isEqualTo("PARQUET");
+        assertThat(response.format()).isEqualTo("PARQUET_DATASET");
+        assertThat(response.objectKey()).isEqualTo("entities/" + entityId + "/dataset");
         assertThat(response.bucket()).isEqualTo("refined");
         assertThat(response.rowCount()).isEqualTo(125);
         verify(imports)
@@ -116,6 +119,8 @@ class GovernedDatasetResolutionServiceTest {
                 .findFirstByEntityIdAndLastSequenceIsNotNullAndLastOffsetIsNotNullOrderByUpdatedAtDesc(
                         entityId))
                 .thenReturn(Optional.of(stream));
+        when(imports.completedRows(entityId)).thenReturn(0L);
+        when(streams.completedRows(entityId)).thenReturn(215_000L);
 
         val response = new GovernedDatasetResolutionService(
                 executions, bindings, imports, streamBindings, streams,

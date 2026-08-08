@@ -169,6 +169,12 @@ Kafka. Execution, result, cancellation, and ingestion lifecycles use Kafka.
 The UI uses separate SSE channels for chat and execution events and reloads
 authoritative REST state after reconnect.
 
+Execution details include a reconnect-safe live Spark console. Python samples
+the execution-scoped Spark status tracker and publishes structured job, stage,
+and task counts through the signed execution lifecycle contract. Java persists
+those events and notifies the authorized browser through the existing execution
+SSE channel; the browser never reads executor log files directly.
+
 ### Governed ingestion
 
 ```mermaid
@@ -197,6 +203,15 @@ Continuous ingestion accepts bounded generic Kafka chunks for CDR, XDR, HR,
 IoT, or other entity types. Existing entity UUIDs reuse normalized metadata.
 An unknown UUID can be registered transactionally through Java using the
 proposed structure. Structural drift for an existing UUID is rejected.
+
+Administrators can permanently delete an ingested data entity. The delete
+request first retires its UUID transactionally, so new Kafka chunks and MinIO
+notifications are rejected immediately even when a source stream never stops.
+An already-running chunk may publish only its terminal checkpoint; durable
+cleanup then removes related executions, results, relational metadata, and
+raw/refined objects with retry handling. The UUID tombstone is retained, and
+re-ingestion—whether the structure is unchanged or modified—requires a new
+entity UUID.
 
 Each execution is bound to an immutable governed artifact or committed stream
 checkpoint so later ingestion cannot change the data observed by an already
@@ -348,7 +363,7 @@ Java, applies the registered Spark types, and writes an immutable Parquet part
 under:
 
 ```text
-refined/entities/{entityId}/streams/{streamId}/dataset/part-{sequence}-{chunkId}.parquet
+refined/entities/{entityId}/dataset/part-stream-{streamId}-{sequence}-{chunkId}.parquet
 ```
 
 Offsets are committed only after processing. Duplicate chunks do not rewrite
@@ -363,12 +378,14 @@ prefixes rather than operating-system directories:
 | Bucket | Object-key structure | Purpose |
 |---|---|---|
 | `raw` | `incoming/{entityName}_{entityId}_{yyyyMMdd}.csv` | Direct CSV arrival area. A matching `ObjectCreated` event starts file ingestion. |
-| `refined` | `entities/{entityId}/imports/{importId}/data.parquet` | Governed Parquet produced from one direct CSV import. |
-| `refined` | `entities/{entityId}/streams/{streamId}/dataset/part-{sequence}-{chunkId}.parquet` | Immutable Parquet parts appended from bounded Kafka stream chunks. The sequence is zero-padded to 12 digits. |
+| `refined` | `entities/{entityId}/dataset/part-file-{importId}.parquet` | Immutable Parquet part appended from a direct CSV import. |
+| `refined` | `entities/{entityId}/dataset/part-stream-{streamId}-{sequence}-{chunkId}.parquet` | Immutable Parquet part appended from a bounded Kafka stream chunk. The sequence is zero-padded to 12 digits. |
 | `results` | `executions/{executionId}/{artifactId}.parquet` | Full report output or bounded ML-prediction artifact. |
 | `models` | `executions/{executionId}/{modelArtifactId}.zip` | Serialized Spark ML model artifact. |
 
-The entity UUID is therefore present in every governed dataset prefix, while
+Both ingestion methods append to the same entity-level dataset when their
+entity UUID matches and the incoming schema remains compatible. The entity UUID
+is therefore present in every governed dataset prefix, while
 execution outputs are isolated by execution UUID. Java persists the matching
 bucket, object key, size, entity, ingestion checkpoint, and ownership metadata
 in PostgreSQL; it does not read or write these analytical objects. Only the
@@ -485,9 +502,17 @@ Spark, MinIO and Keycloak.
 
 The reporting path accepts versioned Pydantic orders and rejects SQL text. The
 approved registries cover projections, aggregations, grouping, temporal
-grouping, nested `AND`/`OR` filters, `HAVING`, ordering, bounded limits, KPIs,
-and chart hints. Python maps a validated order to explicit Spark DataFrame
-operations.
+grouping, governed numeric range buckets, nested `AND`/`OR` filters, `HAVING`,
+ordering, distinct results, bounded limits, KPIs, and chart hints. The core
+single-entity expression registry additionally supports median/percentile,
+variance/standard deviation, null replacement, typed arithmetic, basic string
+normalization, date extraction/arithmetic, and global top-N. Python maps a
+validated order to explicit Spark DataFrame operations.
+
+Window functions, per-group ranking, rolling calculations, pivots, joins,
+unions, and arbitrary structured-data paths are intentionally outside the
+current contract. Requests requiring those operations are not approximated
+with a different calculation.
 
 The following abbreviated order illustrates the report contract:
 
@@ -600,16 +625,122 @@ metrics, charts, preview data, or persisted artifacts.
 | View/delete own executions and results | ✓ | ✓ | ✓ |
 | Manage users |  |  | ✓ |
 | View/delete all users' executions |  |  | ✓ |
+| Permanently delete data entities and retire their UUIDs |  |  | ✓ |
 | Export completed execution/result views to PDF |  |  | ✓ |
 
 The UI uses one effective platform role per managed user. Authorization is
 enforced in Java and independently validated by Python for execution orders;
 navigation visibility is not treated as the security boundary.
 
+## Product walkthrough
+
+The following captures show the local demonstration environment operating as
+one product: governed ingestion, conversational planning, durable execution,
+Spark processing, business-facing results, and role-aware administration.
+
+### Governed data onboarding
+
+**Data-entity catalog.** The catalog lists the registered CDR, employee,
+payment, and sales entities with their identifiers, ingestion status, and
+governed row counts.
+
+![Data-entity catalog with CDR, employee, payment and sales datasets](screencaptures/Screenshot%202026-08-08%20at%2015.20.32.png)
+
+**Entity details.** The Call Detail Record view shows its completed ingestion,
+row and batch counts, most recent ingestion time, and registered columns with
+their physical names and data types.
+
+![Call Detail Record ingestion status and registered fields](screencaptures/Screenshot%202026-08-08%20at%2015.20.49.png)
+
+### From natural language to a governed result
+
+**Request handoff from chat.** A natural-language sales request receives an
+acknowledgement with a linked execution identifier while the conversation
+remains open.
+
+![Natural-language report request and asynchronous execution acknowledgement](screencaptures/Screenshot%202026-08-08%20at%2015.21.18.png)
+
+**Completed report execution.** The detail screen shows the original request,
+selected entity, approved-plan type, duration, completion status, and recorded
+progress timeline.
+
+![Completed report execution with approved plan and progress timeline](screencaptures/Screenshot%202026-08-08%20at%2015.38.21.png)
+
+**Regional sales result.** The result presents a plain-language summary with a
+grouped bar chart and a regional share-of-total chart.
+
+![Regional sales summary with grouped bar and pie charts](screencaptures/Screenshot%202026-08-08%20at%2015.38.39.png)
+
+### Machine-learning execution and observability
+
+**Machine-learning planning.** The execution screen shows a Sales Record
+request in the planning stage together with its elapsed duration, approved
+plan type, original request, and initial progress event.
+
+![Machine-learning execution in its planning stage](screencaptures/Screenshot%202026-08-08%20at%2015.40.05.png)
+
+**Live execution console.** The execution drawer displays the ML execution
+identifier, elapsed duration, and the current Spark job, stage, and task
+counts.
+
+![Execution-scoped live Spark console](screencaptures/Screenshot%202026-08-08%20at%2015.40.29.png)
+
+**Approved technical order.** The technical-details dialog exposes the
+structured ML order, including the data split, requested metrics, selected
+algorithm, model-selection settings, target, and features.
+
+![Validated machine-learning execution order in technical details](screencaptures/Screenshot%202026-08-08%20at%2015.40.44.png)
+
+**Machine-learning execution progress.** The running execution screen records
+data resolution, candidate-model evaluation, and training stages, with the
+current stage shown at 75 percent.
+
+![Machine-learning model evaluation and training progress](screencaptures/Screenshot%202026-08-08%20at%2015.40.58.png)
+
+**Execution history.** The list combines search, status filtering, pagination,
+running and succeeded executions, and expandable rows that link completed work
+to its result.
+
+![Execution history with running and completed work](screencaptures/Screenshot%202026-08-08%20at%2015.41.18.png)
+
+**Completed ML execution.** The completed detail view shows the 100-percent
+timeline together with result navigation, PDF export, deletion, and back
+actions.
+
+![Completed machine-learning execution and lifecycle history](screencaptures/Screenshot%202026-08-08%20at%2015.42.24.png)
+
+### Explainable ML results
+
+**Result summary and reliability.** The ML result begins with a business
+summary and warnings, followed by cards for the requested analysis, selected
+approach, and reliability metrics.
+
+![Machine-learning result summary, warnings and reliability cards](screencaptures/Screenshot%202026-08-08%20at%2015.42.40.png)
+
+**Selection details and indicators.** The result shows its training,
+validation, and test split; selected GBT regressor; error metrics; validation
+score; tuning-trial count; and candidate-method count.
+
+![Machine-learning key indicators and model-selection evidence](screencaptures/Screenshot%202026-08-08%20at%2015.42.58.png)
+
+**Feature and scenario charts.** The result displays feature importance and
+what-if scenario comparison charts, followed by model metrics and the start of
+the bounded preview section.
+
+![Feature-importance and what-if scenario charts with model metrics](screencaptures/Screenshot%202026-08-08%20at%2015.43.12.png)
+
+### Role-aware administration
+
+**User administration.** The administration view lists each user's full name,
+email, effective role, account status, and available actions, with search,
+status filtering, pagination, and an add-user action.
+
+![Administrative user list with effective roles and account status](screencaptures/Screenshot%202026-08-08%20at%2015.43.38.png)
+
 ## Example prompts
 
-The examples below contain natural-language requests only. The product
-walkthrough that follows shows representative executions and results.
+The examples below contain natural-language requests that can be used to
+produce reports and machine-learning results like those shown above.
 
 ### Reports
 
@@ -971,8 +1102,8 @@ After cloning the repository:
    ./scripts/seed-demo-data.sh
    ```
 
-4. Open `http://localhost:5173`, sign in, and confirm that Sales and Telecom
-   CDR appear under Data Entities.
+4. Open `http://localhost:5173`, sign in, and confirm that Sales, Payment
+   Transactions, Employee Records, and Telecom CDR appear under Data Entities.
 5. Create a report from Chat:
 
    > Show total net sales and average discount rate by region, ordered from
@@ -1040,11 +1171,12 @@ On macOS with iTerm2, the complete clean path is:
 
 1. verifies the running platform;
 2. generates deterministic 50,000-row Sales, 100,000-row Payment Transactions,
-   and 1,000,000-row Telecom CDR datasets in three parallel writer processes;
-3. uploads Sales and Payment Transactions to `raw/incoming`, triggering MinIO
-   `ObjectCreated` ingestion for both files;
+   50,000-row Employee Records, and 1,000,000-row Telecom CDR datasets in four
+   parallel writer processes;
+3. uploads Sales, Payment Transactions, and Employee Records to `raw/incoming`,
+   triggering MinIO `ObjectCreated` ingestion for all three files;
 4. publishes CDR as bounded chunks to the generic `ingestion.records.v1`
-   stream while the two MinIO-triggered file ingestions are active;
+   stream while the three MinIO-triggered file ingestions are active;
 5. waits for authoritative Java-owned ingestion state;
 6. verifies the final governed row counts and artifacts.
 
@@ -1185,6 +1317,10 @@ not create duplicate status/history records or artifacts.
 - Chat deletion physically removes the thread and cascades to owned messages.
 - Execution/artifact deletion coordinates MinIO removal before relational
   cleanup is finalized and remains retryable after partial failure.
+- Data-entity deletion immediately blocks new file and streaming ingestion,
+  waits only for work already in flight to reach a safe boundary, then removes
+  dependent executions, ingestion metadata, and MinIO objects. A durable UUID
+  tombstone prevents accidental resurrection.
 - Scheduled retention independently covers chats, executions, previews and
   artifacts.
 - Soft-deleted relational data is hard-deleted after the configured retention
@@ -1219,8 +1355,11 @@ Run deterministic demo acceptance:
 ```
 
 This additionally verifies generation of the exact one-million-row CDR,
-fifty-thousand-row Sales, and one-hundred-thousand-row Payment Transactions
-datasets.
+fifty-thousand-row Sales, one-hundred-thousand-row Payment Transactions, and
+fifty-thousand-row Employee Records datasets. The employee CSV represents
+complex source values losslessly as JSON, base64, and ISO-8601 duration text;
+CSV itself cannot carry native Spark array, map, struct, binary, interval,
+CHAR/VARCHAR, or timestamp-without-time-zone type metadata.
 
 ## Current boundaries and limitations
 

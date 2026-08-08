@@ -39,7 +39,10 @@
       tabType: 'page'
     });
     void load(!initialView, pageNumber).then(connect);
+    const entityChanged = () => void load(false);
+    window.addEventListener('kozmik:entity-changed', entityChanged);
     return () => {
+      window.removeEventListener('kozmik:entity-changed', entityChanged);
       stream?.close();
       if (reloadTimer) clearTimeout(reloadTimer);
       for (const timer of completionTimers.values()) clearTimeout(timer);
@@ -158,6 +161,10 @@
             <Card.Description>{entity.description}</Card.Description>
           </Card.Header>
           <Card.Content class="grid flex-1 content-start gap-4 text-sm">
+            <div class="min-w-0">
+              <p class="text-muted-foreground">{$t('entityId')}</p>
+              <code class="block break-all text-xs font-medium select-all">{entity.id}</code>
+            </div>
             <div>
               <p class="text-muted-foreground">{$t('importStatus')}</p>
               <p class="font-medium">

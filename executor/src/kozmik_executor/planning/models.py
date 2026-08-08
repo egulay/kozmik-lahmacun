@@ -41,6 +41,10 @@ class AggregationFunction(StrEnum):
     AVG = "AVG"
     MIN = "MIN"
     MAX = "MAX"
+    MEDIAN = "MEDIAN"
+    PERCENTILE = "PERCENTILE"
+    VARIANCE = "VARIANCE"
+    STDDEV = "STDDEV"
 
 
 class SortDirection(StrEnum):
@@ -117,12 +121,24 @@ class AggregationItem(ContractModel):
     column: str | None = None
     alias: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
     display_label: str | None = Field(default=None, min_length=1, max_length=200)
+    filter: FilterExpression | None = None
+    percentile: float | None = Field(default=None, gt=0, lt=1)
 
     @model_validator(mode="after")
     def count_only_without_column(self) -> "AggregationItem":
         if self.column is None and self.function != AggregationFunction.COUNT:
             raise ValueError("only COUNT may omit column")
+        if (self.function == AggregationFunction.PERCENTILE) != (self.percentile is not None):
+            raise ValueError("PERCENTILE requires percentile and other functions forbid it")
         return self
+
+
+class CalculatedMetric(ContractModel):
+    operation: Literal["DIVIDE", "PERCENTAGE"]
+    numerator: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    denominator: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    alias: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    display_label: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class OrderByItem(ContractModel):
@@ -137,6 +153,67 @@ class TemporalGroupItem(ContractModel):
     display_label: str | None = Field(default=None, min_length=1, max_length=200)
 
 
+class NumericRangeBucket(ContractModel):
+    label: str = Field(min_length=1, max_length=120)
+    lower_bound: float | None = None
+    upper_bound: float | None = None
+    include_lower: bool = True
+    include_upper: bool = False
+
+    @model_validator(mode="after")
+    def valid_bounds(self) -> "NumericRangeBucket":
+        if self.lower_bound is None and self.upper_bound is None:
+            raise ValueError("a numeric range must define at least one bound")
+        if (
+            self.lower_bound is not None
+            and self.upper_bound is not None
+            and self.lower_bound >= self.upper_bound
+        ):
+            raise ValueError("numeric range lowerBound must be below upperBound")
+        return self
+
+
+class NumericRangeGroupItem(ContractModel):
+    column: str
+    alias: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    display_label: str | None = Field(default=None, min_length=1, max_length=200)
+    buckets: list[NumericRangeBucket] = Field(min_length=2, max_length=20)
+
+
+class DerivedFieldOperation(StrEnum):
+    ADD = "ADD"
+    SUBTRACT = "SUBTRACT"
+    MULTIPLY = "MULTIPLY"
+    DIVIDE = "DIVIDE"
+    LOWER = "LOWER"
+    UPPER = "UPPER"
+    TRIM = "TRIM"
+    LENGTH = "LENGTH"
+    SUBSTRING = "SUBSTRING"
+    REPLACE = "REPLACE"
+    YEAR = "YEAR"
+    QUARTER = "QUARTER"
+    MONTH = "MONTH"
+    DAY = "DAY"
+    DAY_OF_WEEK = "DAY_OF_WEEK"
+    DATE_ADD_DAYS = "DATE_ADD_DAYS"
+    DATE_DIFF_DAYS = "DATE_DIFF_DAYS"
+    COALESCE = "COALESCE"
+
+
+class DerivedField(ContractModel):
+    operation: DerivedFieldOperation
+    column: str
+    alias: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    display_label: str | None = Field(default=None, min_length=1, max_length=200)
+    operand_column: str | None = None
+    operand_value: Any | None = None
+    start: int | None = Field(default=None, ge=1, le=10_000)
+    length: int | None = Field(default=None, ge=1, le=10_000)
+    search: str | None = Field(default=None, max_length=500)
+    replacement: str | None = Field(default=None, max_length=500)
+
+
 class ChartHint(ContractModel):
     chart_type: Literal["TABLE", "BAR", "LINE", "PIE"]
     category_column: str | None = None
@@ -145,11 +222,16 @@ class ChartHint(ContractModel):
 
 class ReportPayload(ContractModel):
     select: list[SelectItem] = Field(min_length=1, max_length=100)
+    distinct: bool = False
     # A list remains accepted as the v1 shorthand for an AND group.
     filters: list[FilterItem] | FilterExpression = Field(default_factory=list)
     group_by: list[str] = Field(default_factory=list, max_length=20)
     temporal_group_by: list[TemporalGroupItem] = Field(default_factory=list, max_length=20)
+    numeric_range_group_by: list[NumericRangeGroupItem] = Field(
+        default_factory=list, max_length=5)
+    derived_fields: list[DerivedField] = Field(default_factory=list, max_length=50)
     aggregations: list[AggregationItem] = Field(default_factory=list, max_length=20)
+    calculated_metrics: list[CalculatedMetric] = Field(default_factory=list, max_length=20)
     having: FilterExpression | None = None
     order_by: list[OrderByItem] = Field(default_factory=list, max_length=20)
     limit: int = Field(ge=1, le=10_000)

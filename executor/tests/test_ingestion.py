@@ -124,9 +124,32 @@ def test_spark_csv_schema_enforcement_and_governed_parquet(spark):
     rows, key, size = asyncio.run(
         SparkCsvIngester(spark, store).ingest(import_id, "raw", "incoming/source.csv", schema()))
     assert rows == 2
-    assert key.startswith(f"entities/{ENTITY}/imports/{import_id}/")
+    assert key == f"entities/{ENTITY}/dataset/part-file-{import_id}.parquet"
     assert size > 0
     assert store.upload == ("refined", key)
+
+
+def test_spark_csv_accepts_json_and_multiline_values_in_quoted_cells(spark):
+    governed_schema = IngestionSchema.model_validate({
+        "schemaVersion": "1.0", "entityId": str(ENTITY),
+        "columns": [
+            {"columnName": "employee_id", "dataType": "LONG"},
+            {"columnName": "skills", "dataType": "STRING"},
+            {"columnName": "metadata", "dataType": "STRING"},
+            {"columnName": "notes", "dataType": "STRING"},
+        ],
+    })
+    store = MemoryMinio(
+        b'employee_id,skills,metadata,notes\r\n'
+        b'1001,"[""spark"",""sql""]","{""team"":""data""}",'
+        b'"first line\nsecond line"\r\n'
+    )
+
+    rows, _, size = asyncio.run(SparkCsvIngester(spark, store).ingest(
+        uuid4(), "raw", "incoming/employees.csv", governed_schema))
+
+    assert rows == 1
+    assert size > 0
 
 
 def test_spark_csv_schema_mismatch_is_rejected(spark):
@@ -203,6 +226,21 @@ def test_metadata_failure_publishes_terminal_import_status():
 
     assert published[-1].status == "FAILED"
     assert published[-1].error_code == "METADATA_ENRICHMENT_INVALID"
+
+
+def test_exhausted_infrastructure_failure_can_publish_terminal_status():
+    source_event, _, key, entity_id = parse_object_created(notification())
+    published = []
+
+    async def publish(event):
+        published.append(event)
+
+    processor = IngestionProcessor(None, None, publish)
+    asyncio.run(processor.publish_terminal_failure(source_event, key, entity_id))
+
+    assert published[-1].stage == "FAILED"
+    assert published[-1].status == "FAILED"
+    assert published[-1].error_code == "IMPORT_FAILED"
 
 
 def test_cdr_kafka_chunks_append_to_governed_dataset_and_report_cumulative_rows(

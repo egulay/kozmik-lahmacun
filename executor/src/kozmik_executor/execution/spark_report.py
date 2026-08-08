@@ -20,6 +20,7 @@ from kozmik_executor.planning.models import (
     FilterOperator,
     ReportOrder,
     TemporalGranularity,
+    DerivedFieldOperation,
 )
 from kozmik_executor.spark_runtime import run_spark_operation
 from kozmik_executor.parquet_artifacts import write_parquet_artifact
@@ -96,14 +97,15 @@ FILTER_REGISTRY: dict[FilterOperator, Callable] = {
 }
 
 AGGREGATION_REGISTRY: dict[AggregationFunction, Callable] = {
-    AggregationFunction.COUNT: lambda item: spark_fn.count(
-        "*" if item.column is None else item.column
-    ),
-    AggregationFunction.COUNT_DISTINCT: lambda item: spark_fn.count_distinct(item.column),
-    AggregationFunction.SUM: lambda item: spark_fn.sum(item.column),
-    AggregationFunction.AVG: lambda item: spark_fn.avg(item.column),
-    AggregationFunction.MIN: lambda item: spark_fn.min(item.column),
-    AggregationFunction.MAX: lambda item: spark_fn.max(item.column),
+    AggregationFunction.COUNT: lambda column: spark_fn.count(column),
+    AggregationFunction.COUNT_DISTINCT: lambda column: spark_fn.count_distinct(column),
+    AggregationFunction.SUM: lambda column: spark_fn.sum(column),
+    AggregationFunction.AVG: lambda column: spark_fn.avg(column),
+    AggregationFunction.MIN: lambda column: spark_fn.min(column),
+    AggregationFunction.MAX: lambda column: spark_fn.max(column),
+    AggregationFunction.MEDIAN: lambda column: spark_fn.percentile_approx(column, 0.5),
+    AggregationFunction.VARIANCE: lambda column: spark_fn.variance(column),
+    AggregationFunction.STDDEV: lambda column: spark_fn.stddev(column),
 }
 
 TEMPORAL_GROUP_REGISTRY: dict[TemporalGranularity, Callable] = {
@@ -227,7 +229,12 @@ class SparkReportExecutor:
                 item.alias for item in order.payload.temporal_group_by
                 if not _SENSITIVE_SUMMARY_FIELD.search(item.alias)
             ),
+            *(
+                item.alias for item in order.payload.numeric_range_group_by
+                if not _SENSITIVE_SUMMARY_FIELD.search(item.alias)
+            ),
             *(item.alias for item in order.payload.aggregations),
+            *(item.alias for item in order.payload.calculated_metrics),
         }
         breakdown: list[dict[str, Any]] = []
         for row in rows:
@@ -284,8 +291,46 @@ class SparkReportExecutor:
         return combined
 
     @staticmethod
+    def _map_derived_field(item):
+        source = spark_fn.col(item.column)
+        operand = (
+            spark_fn.col(item.operand_column)
+            if item.operand_column else spark_fn.lit(item.operand_value)
+        )
+        operations = {
+            DerivedFieldOperation.ADD: lambda: source + operand,
+            DerivedFieldOperation.SUBTRACT: lambda: source - operand,
+            DerivedFieldOperation.MULTIPLY: lambda: source * operand,
+            DerivedFieldOperation.DIVIDE: lambda: spark_fn.when(operand != 0, source / operand),
+            DerivedFieldOperation.LOWER: lambda: spark_fn.lower(source),
+            DerivedFieldOperation.UPPER: lambda: spark_fn.upper(source),
+            DerivedFieldOperation.TRIM: lambda: spark_fn.trim(source),
+            DerivedFieldOperation.LENGTH: lambda: spark_fn.length(source),
+            DerivedFieldOperation.SUBSTRING: lambda: spark_fn.substring(
+                source, item.start, item.length),
+            DerivedFieldOperation.REPLACE: lambda: spark_fn.regexp_replace(
+                source, re.escape(item.search or ""), item.replacement or ""),
+            DerivedFieldOperation.YEAR: lambda: spark_fn.year(source),
+            DerivedFieldOperation.QUARTER: lambda: spark_fn.quarter(source),
+            DerivedFieldOperation.MONTH: lambda: spark_fn.month(source),
+            DerivedFieldOperation.DAY: lambda: spark_fn.dayofmonth(source),
+            DerivedFieldOperation.DAY_OF_WEEK: lambda: spark_fn.dayofweek(source),
+            DerivedFieldOperation.DATE_ADD_DAYS: lambda: spark_fn.date_add(
+                source, int(item.operand_value)),
+            DerivedFieldOperation.DATE_DIFF_DAYS: lambda: spark_fn.datediff(source, operand),
+            DerivedFieldOperation.COALESCE: lambda: spark_fn.coalesce(source, operand),
+        }
+        operation = operations.get(item.operation)
+        if operation is None:
+            raise ValueError("DERIVED_FIELD_OPERATION_NOT_ALLOWED")
+        return operation()
+
+    @staticmethod
     def map_order(frame: DataFrame, order: ReportOrder) -> DataFrame:
         result = frame
+        for item in order.payload.derived_fields:
+            result = result.withColumn(
+                item.alias, SparkReportExecutor._map_derived_field(item))
         filters = order.payload.filters
         if isinstance(filters, list):
             for item in filters:
@@ -300,14 +345,46 @@ class SparkReportExecutor:
             if operation is None:
                 raise ValueError("TEMPORAL_GRANULARITY_NOT_ALLOWED")
             result = result.withColumn(item.alias, operation(spark_fn.col(item.column)))
-        aggregations = [
-            AGGREGATION_REGISTRY[item.function](item).alias(item.alias)
-            for item in order.payload.aggregations
-        ]
+        numeric_range_groups = {
+            item.alias: item for item in order.payload.numeric_range_group_by
+        }
+        for item in order.payload.numeric_range_group_by:
+            source = spark_fn.col(item.column)
+            expression = None
+            for bucket in item.buckets:
+                condition = source.isNotNull()
+                if bucket.lower_bound is not None:
+                    condition = condition & (
+                        source >= bucket.lower_bound
+                        if bucket.include_lower else source > bucket.lower_bound
+                    )
+                if bucket.upper_bound is not None:
+                    condition = condition & (
+                        source <= bucket.upper_bound
+                        if bucket.include_upper else source < bucket.upper_bound
+                    )
+                expression = (
+                    spark_fn.when(condition, bucket.label)
+                    if expression is None
+                    else expression.when(condition, bucket.label)
+                )
+            result = result.withColumn(item.alias, expression.otherwise(None))
+        aggregations = []
+        for item in order.payload.aggregations:
+            source = spark_fn.lit(1) if item.column is None else spark_fn.col(item.column)
+            if item.filter is not None:
+                source = spark_fn.when(SparkReportExecutor._map_filter(item.filter), source)
+            operation = (
+                spark_fn.percentile_approx(source, item.percentile)
+                if item.function == AggregationFunction.PERCENTILE
+                else AGGREGATION_REGISTRY[item.function](source)
+            )
+            aggregations.append(operation.alias(item.alias))
         if aggregations:
             group_columns = [
                 *order.payload.group_by,
                 *(item.alias for item in order.payload.temporal_group_by),
+                *(item.alias for item in order.payload.numeric_range_group_by),
             ]
             result = (result.groupBy(*group_columns).agg(*aggregations)
                       if group_columns else result.agg(*aggregations))
@@ -318,6 +395,9 @@ class SparkReportExecutor:
                     item.alias
                     if item.alias in temporal_groups
                     and temporal_groups[item.alias].column == item.column
+                    else item.alias
+                    if item.alias in numeric_range_groups
+                    and numeric_range_groups[item.alias].column == item.column
                     else item.column
                 ).alias(item.alias or item.column)
                 for item in order.payload.select
@@ -326,17 +406,33 @@ class SparkReportExecutor:
                     item.alias in temporal_groups
                     and temporal_groups[item.alias].column == item.column
                 )
+                or (
+                    item.alias in numeric_range_groups
+                    and numeric_range_groups[item.alias].column == item.column
+                )
             ]
             result = result.select(
                 *grouped_selections,
                 *(spark_fn.col(item.alias) for item in order.payload.aggregations),
             )
+            for item in order.payload.calculated_metrics:
+                numerator = spark_fn.col(item.numerator).cast("double")
+                denominator = spark_fn.col(item.denominator).cast("double")
+                multiplier = 100.0 if item.operation == "PERCENTAGE" else 1.0
+                result = result.withColumn(
+                    item.alias,
+                    spark_fn.when(
+                        denominator != 0, numerator / denominator * multiplier,
+                    ),
+                )
         else:
             selections = [
                 spark_fn.col(item.column).alias(item.alias or item.column)
                 for item in order.payload.select
             ]
             result = result.select(*selections)
+        if order.payload.distinct:
+            result = result.distinct()
         if order.payload.order_by:
             result = result.orderBy(*[
                 spark_fn.col(item.column).asc()
@@ -347,14 +443,25 @@ class SparkReportExecutor:
 
     @staticmethod
     def _kpis(order: ReportOrder, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if not rows or order.payload.group_by or order.payload.temporal_group_by:
+        if (
+            not rows or order.payload.group_by or order.payload.temporal_group_by
+            or order.payload.numeric_range_group_by
+        ):
             return []
-        return [
+        measures = [
             {"code": item.alias.upper(), "labelKey": f"result.kpi.{item.alias}",
              "value": rows[0].get(item.alias), "unit": None}
             for item in order.payload.aggregations[:10]
             if item.alias in rows[0]
         ]
+        measures.extend(
+            {"code": item.alias.upper(), "labelKey": f"result.kpi.{item.alias}",
+             "value": rows[0].get(item.alias),
+             "unit": "%" if item.operation == "PERCENTAGE" else None}
+            for item in order.payload.calculated_metrics[:max(0, 10 - len(measures))]
+            if item.alias in rows[0]
+        )
+        return measures
 
     @staticmethod
     def _summary_comparisons(
@@ -364,11 +471,15 @@ class SparkReportExecutor:
         if row_count < 2 or not order.payload.aggregations:
             return []
         temporal_aliases = {item.alias for item in order.payload.temporal_group_by}
+        numeric_range_aliases = {
+            item.alias for item in order.payload.numeric_range_group_by
+        }
         dimensions = [
             item.alias or item.column
             for item in order.payload.select
             if item.column in order.payload.group_by
             or (item.alias or item.column) in temporal_aliases
+            or (item.alias or item.column) in numeric_range_aliases
         ]
         if not dimensions:
             return []
@@ -582,11 +693,15 @@ class SparkReportExecutor:
         if not count_measures or not numerators:
             return []
         temporal_aliases = {item.alias for item in order.payload.temporal_group_by}
+        numeric_range_aliases = {
+            item.alias for item in order.payload.numeric_range_group_by
+        }
         dimensions = [
             item.alias or item.column
             for item in order.payload.select
             if item.column in order.payload.group_by
             or (item.alias or item.column) in temporal_aliases
+            or (item.alias or item.column) in numeric_range_aliases
         ]
         if not dimensions:
             return []
@@ -679,7 +794,17 @@ class SparkReportExecutor:
         })
         labels.update({
             item.alias: item.display_label
+            for item in order.payload.numeric_range_group_by
+            if item.display_label
+        })
+        labels.update({
+            item.alias: item.display_label
             for item in order.payload.aggregations
+            if item.display_label
+        })
+        labels.update({
+            item.alias: item.display_label
+            for item in order.payload.calculated_metrics
             if item.display_label
         })
         return labels
@@ -691,6 +816,7 @@ class SparkReportExecutor:
         grouped_dimensions = [
             *order.payload.group_by,
             *(item.alias for item in order.payload.temporal_group_by),
+            *(item.alias for item in order.payload.numeric_range_group_by),
         ]
         for index, hint in enumerate(order.payload.chart_hints):
             category = hint.category_column

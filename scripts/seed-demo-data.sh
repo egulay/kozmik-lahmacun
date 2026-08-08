@@ -14,15 +14,19 @@ set +a
 readonly cdr_entity_id="22222222-2222-4222-8222-222222222222"
 readonly sales_entity_id="11111111-1111-4111-8111-111111111111"
 readonly payment_entity_id="33333333-3333-4333-8333-333333333333"
+readonly employee_entity_id="44444444-4444-4444-8444-444444444444"
 readonly import_date="20260728"
 readonly generated_directory="${REPOSITORY_ROOT}/demo/generated"
 readonly cdr_source="${generated_directory}/cdr.csv"
 readonly sales_source="${generated_directory}/sales_${sales_entity_id}_${import_date}.csv"
 readonly payment_source="${generated_directory}/payment_transactions_${payment_entity_id}_${import_date}.csv"
+readonly employee_source="${generated_directory}/employee_records_${employee_entity_id}_${import_date}.csv"
 sales_object="$(basename "${sales_source}")"
 readonly sales_object
 payment_object="$(basename "${payment_source}")"
 readonly payment_object
+employee_object="$(basename "${employee_source}")"
+readonly employee_object
 readonly executor_python="${REPOSITORY_ROOT}/executor/.venv/bin/python"
 
 echo "Verifying the running platform before data seeding..."
@@ -43,12 +47,13 @@ then
   exit 1
 fi
 
-echo "Generating deterministic CDR, sales, and payment transaction CSV datasets..."
+echo "Generating deterministic CDR, sales, payment transaction, and employee CSV datasets..."
 python3 "${REPOSITORY_ROOT}/demo/generate_data.py" \
   --output "${generated_directory}" \
   --cdr-rows 1000000 \
   --sales-rows 50000 \
-  --payment-rows 100000
+  --payment-rows 100000 \
+  --employee-rows 50000
 
 completed_import_exists() {
   local object_name="$1"
@@ -91,6 +96,7 @@ upload_if_needed() {
 
 upload_if_needed "${sales_source}" "${sales_object}"
 upload_if_needed "${payment_source}" "${payment_object}"
+upload_if_needed "${employee_source}" "${employee_object}"
 
 wait_for_import() {
   local object_name="$1"
@@ -153,13 +159,15 @@ else
   fi
 fi
 
-# Both file-ingestion events are already active while the CDR chunks are
+# File-ingestion events are already active while the CDR chunks are
 # published. The executor's configured Spark concurrency limit remains the
 # authoritative resource boundary.
 echo "Waiting for Sales MinIO ObjectCreated ingestion..."
 wait_for_import "${sales_object}"
 echo "Waiting for Payment Transactions MinIO ObjectCreated ingestion..."
 wait_for_import "${payment_object}"
+echo "Waiting for Employee Records MinIO ObjectCreated ingestion..."
+wait_for_import "${employee_object}"
 
 echo "Waiting for the governed CDR Kafka stream to reach 1,000,000 rows..."
 cdr_deadline=$((SECONDS + 1800))
@@ -194,5 +202,5 @@ compose exec -T postgres psql \
   --dbname "${POSTGRES_DB}" \
   --command "SELECT id, source_id, status, cumulative_rows, last_partition, last_offset FROM kozmik_lahmacun.ingestion_stream ORDER BY started_at"
 
-echo "Demo data is ready: 1,000,000 CDR rows, 50,000 sales rows, and 100,000 payment transaction rows."
+echo "Demo data is ready: 1,000,000 CDR rows, 50,000 sales rows, 100,000 payment transaction rows, and 50,000 employee rows."
 "${REPOSITORY_ROOT}/scripts/full-demo-smoke.sh" --require-demo-data

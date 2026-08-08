@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import type { ECharts, EChartsOption } from 'echarts';
   import * as Card from './ui/card/index.js';
 
@@ -22,7 +22,11 @@
   let chart = $state.raw<ECharts | undefined>();
   let renderError = $state(false);
   let frame: number | undefined;
+  let renderedOptionSignature = '';
+  let renderedWidth = 0;
+  let renderedHeight = 0;
   const maximumBarValue = $derived(Math.max(...bars.map((item) => Math.abs(item.value)), 1));
+  const optionSignature = $derived(JSON.stringify({ option, locale }));
 
   onMount(() => {
     let observer: ResizeObserver | undefined;
@@ -32,7 +36,11 @@
     const resizeChart = () => {
       if (container.clientWidth <= 0) return;
       const height = document.body.classList.contains('pdf-exporting') ? 180 : 300;
-      chart?.resize({ width: container.clientWidth, height });
+      const width = Math.round(container.clientWidth);
+      if (width === renderedWidth && height === renderedHeight) return;
+      renderedWidth = width;
+      renderedHeight = height;
+      chart?.resize({ width, height });
     };
     const prepareForPrint = () => {
       chart?.setOption(chartOption(), true);
@@ -45,6 +53,9 @@
       if (disposed) return;
       chart = echarts.init(container, undefined, { renderer: 'svg', height: 300 });
       chart.setOption(chartOption(), true);
+      renderedOptionSignature = optionSignature;
+      renderedWidth = Math.round(container.clientWidth);
+      renderedHeight = 300;
       renderError = false;
       observer = new ResizeObserver(() => {
         resizeChart();
@@ -84,12 +95,13 @@
   });
 
   $effect(() => {
-    option;
-    if (chart) {
+    const signature = optionSignature;
+    if (chart && signature !== renderedOptionSignature) {
       if (frame !== undefined) cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         try {
-          chart?.setOption(chartOption(), true);
+          chart?.setOption(untrack(chartOption), true);
+          renderedOptionSignature = signature;
           renderError = false;
         } catch (error) {
           console.error('ECharts option rendering failed', error);
@@ -146,10 +158,13 @@
         trigger: containsPie ? 'item' : 'axis',
         ...configuredTooltip,
         show: true,
-        triggerOn: 'mousemove|click|mousewheel',
+        triggerOn: 'mousemove',
         renderMode: 'html',
         confine: true,
-        enterable: false,
+        enterable: true,
+        hideDelay: 200,
+        transitionDuration: 0,
+        axisPointer: { animation: false },
         backgroundColor: surface,
         borderColor: border,
         textStyle: { color: foreground },

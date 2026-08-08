@@ -68,15 +68,17 @@ class DatasetObject:
 class RecordingDatasetMinio(RecordingMinio):
     def list_objects(self, bucket, prefix, recursive):
         return [
-            DatasetObject(prefix + "part-000000000000-"
+            DatasetObject(prefix + "part-file-"
                           "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1.parquet"),
-            DatasetObject(prefix + "part-000000000001-"
+            DatasetObject(prefix + "part-stream-bbbbbbbb-bbbb-4bbb-8bbb-"
+                          "bbbbbbbbbbb1-000000000001-"
                           "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2.parquet"),
-            DatasetObject(prefix + "part-000000000002-"
+            DatasetObject(prefix + "part-file-"
                           "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3.parquet"),
         ]
 
     def fget_object(self, bucket, object_key, path):
+        self.download = (bucket, object_key)
         Path(path).write_bytes(b"PAR1-governed-part")
 
 
@@ -88,12 +90,9 @@ def response(value: ExecutionCommand, *, entity_id=None):
         "entityId": str(entity_id or value.entity_id),
 
         "importId": str(import_id),
-        "format": "PARQUET",
+        "format": "PARQUET_DATASET",
         "bucket": "refined",
-        "objectKey": (
-            f"entities/{entity_id or value.entity_id}/imports/{import_id}/"
-            "data.parquet"
-        ),
+        "objectKey": f"entities/{entity_id or value.entity_id}/dataset",
         "rowCount": 42,
         "executionType": value.execution_type,
         "actorUserId": str(value.actor_user_id),
@@ -110,8 +109,7 @@ def dataset_response(value: ExecutionCommand):
     result["importId"] = None
     result["streamId"] = str(stream_id)
     result["throughSequence"] = 1
-    result["objectKey"] = (
-        f"entities/{value.entity_id}/streams/{stream_id}/dataset")
+    result["objectKey"] = f"entities/{value.entity_id}/dataset"
     return result
 
 
@@ -124,13 +122,15 @@ def test_exact_execution_entity_and_schema_resolve_to_local_governed_parquet(mon
         return httpx.Response(200, json=response(value))
 
     monkeypatch.setenv("INTERNAL_API_KEY", "internal-test-key")
-    store = RecordingMinio()
+    store = RecordingDatasetMinio()
     resolver = GovernedDatasetResolver(
         minio=store, transport=httpx.MockTransport(handler))
 
     async def resolve():
         async with resolver.resolve(value) as configuration:
-            assert Path(configuration["datasetUri"]).read_bytes().startswith(b"PAR1")
+            parts = sorted(Path(configuration["datasetUri"]).glob("*.parquet"))
+            assert len(parts) == 3
+            assert all(part.read_bytes().startswith(b"PAR1") for part in parts)
             assert configuration["datasetFormat"] == "parquet"
             assert configuration["datasetRowCount"] == 42
             return configuration["datasetUri"]
@@ -173,7 +173,7 @@ def test_parquet_dataset_prefix_downloads_all_governed_parts(monkeypatch):
     async def resolve():
         async with resolver.resolve(value) as configuration:
             parts = sorted(Path(configuration["datasetUri"]).glob("*.parquet"))
-            assert len(parts) == 2
+            assert len(parts) == 3
             assert all(part.read_bytes().startswith(b"PAR1") for part in parts)
 
     asyncio.run(resolve())

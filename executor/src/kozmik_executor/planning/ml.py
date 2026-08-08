@@ -159,11 +159,11 @@ def validate_ml_order(order: MlOrder, request: ReportPlanningRequest) -> None:
             issues.append(ValidationIssue(code="FEATURE_NOT_ALLOWED",
                                           path=f"payload.featureColumns[{index}]",
                                           message="Feature must be an eligible governed column"))
-        elif column.data_type not in NUMERIC | {DataType.STRING}:
+        elif column.data_type not in set(DataType):
             issues.append(ValidationIssue(
                 code="FEATURE_TYPE_NOT_SUPPORTED",
                 path=f"payload.featureColumns[{index}]",
-                message="Feature must be numeric or categorical text",
+                message="Feature type is not supported by the governed ML mapping",
             ))
     expected_categorical = {
         name for name in order.payload.feature_columns
@@ -217,14 +217,11 @@ def validate_ml_order(order: MlOrder, request: ReportPlanningRequest) -> None:
                     ))
     for index, item in enumerate(order.payload.filters):
         column = columns.get(item.column)
-        if (
-            column is None
-            or column.data_type not in NUMERIC
-        ):
+        if column is None:
             issues.append(ValidationIssue(
                 code="FILTER_COLUMN_NOT_ALLOWED",
                 path=f"payload.filters[{index}].column",
-                message="Filter column must be report eligible",
+                message="Filter column must be present in the authorized schema",
             ))
             continue
         allowed_types = FILTER_TYPES.get(item.operator)
@@ -324,6 +321,11 @@ values inside the approved ranges; do not mechanically use the minimum and maxim
 For an existing authorized BOOLEAN outcome column, use BINARY_CLASSIFICATION and preserve that
 exact columnName as targetColumn. A BOOLEAN target is already binary; do not invent an alias or
 binaryTargetDerivation for it.
+Authorized STRING features must be listed in categoricalFeatureColumns. Authorized numeric,
+BOOLEAN, DATE, and TIMESTAMP features remain outside categoricalFeatureColumns; the trusted
+executor converts non-text values deterministically. Filters may use any authorized column with
+an operator compatible with its data type. Do not discard a useful field merely because its
+source type is BOOLEAN, DATE, or TIMESTAMP.
 When the user asks which records are likely to exceed or fall below a numeric threshold, use
 BINARY_CLASSIFICATION with binaryTargetDerivation. Set sourceColumn to the authorized numeric
 column, operator to GT, GTE, LT, or LTE, threshold to the requested numeric boundary, and use a

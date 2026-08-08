@@ -35,20 +35,14 @@ class GovernedDataset(ContractModel):
 
     @model_validator(mode="after")
     def safe_object_key(self) -> "GovernedDataset":
-        expected = (
-            f"entities/{self.entity_id}/imports/{self.import_id}/"
-            if self.format == "PARQUET"
-            else f"entities/{self.entity_id}/streams/{self.stream_id}/"
-        )
+        expected = f"entities/{self.entity_id}/dataset"
         safe_suffix = (
             self.format == "PARQUET" and self.object_key.endswith(".parquet")
         ) or (
-            self.format == "PARQUET_DATASET" and self.object_key.endswith("/dataset")
+            self.format == "PARQUET_DATASET" and self.object_key == expected
         )
         if (
             (self.format == "PARQUET" and self.import_id is None)
-            or (self.format == "PARQUET_DATASET"
-                and (self.stream_id is None or self.through_sequence is None))
             or
             not self.object_key.startswith(expected)
             or not safe_suffix
@@ -125,12 +119,7 @@ class GovernedDatasetResolver:
                         not item.object_name.endswith(".parquet") for item in objects
                     ):
                         raise DatasetResolutionError("GOVERNED_DATASET_NOT_FOUND")
-                    selected = []
-                    for item in objects:
-                        match = re.search(r"/part-(\d{12})-[0-9a-fA-F-]{36}\.parquet$",
-                                          item.object_name)
-                        if match and int(match.group(1)) <= dataset.through_sequence:
-                            selected.append(item)
+                    selected = list(objects)
                     if not selected:
                         raise DatasetResolutionError("GOVERNED_DATASET_NOT_FOUND")
                     for index, item in enumerate(selected):

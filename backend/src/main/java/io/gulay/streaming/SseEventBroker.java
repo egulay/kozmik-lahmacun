@@ -44,6 +44,10 @@ public final class SseEventBroker<K> {
         publish(key, eventId, eventName, data, false);
     }
 
+    public void publishAll(String eventId, String eventName, Object data) {
+        subscribers.keySet().forEach(key -> publish(key, eventId, eventName, data));
+    }
+
     public void publish(
             K key, String eventId, String eventName, Object data, boolean terminal) {
         for (val emitter : subscribers.getOrDefault(key, new CopyOnWriteArrayList<>())) {

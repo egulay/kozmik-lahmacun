@@ -4,6 +4,7 @@ import lombok.val;
 
 import tools.jackson.databind.ObjectMapper;
 import io.gulay.entity.data.repository.BusinessEntityRepository;
+import io.gulay.entity.data.model.EntityStatus;
 import io.gulay.execution.messaging.KafkaMessageSigner;
 import io.gulay.ingestion.data.model.IngestionStreamBatchModel;
 import io.gulay.ingestion.data.model.IngestionStreamEventModel;
@@ -54,7 +55,8 @@ public class StreamIngestionEventConsumer {
         val stream = streams.findById(event.streamId()).orElseGet(() ->
                 streams.save(IngestionStreamModel.builder()
                         .id(event.streamId())
-                        .entity(entities.findById(event.entityId()).orElseThrow(
+                        .entity(entities.findById(event.entityId())
+                                .filter(entity -> entity.getStatus() == EntityStatus.ACTIVE).orElseThrow(
                                 () -> new IllegalArgumentException("Unknown entity")))
                         .sourceId(event.sourceId()).topic(event.topic()).status("ACTIVE")
                         .cumulativeRows(0).startedAt(now).updatedAt(now).build()));
@@ -63,7 +65,12 @@ public class StreamIngestionEventConsumer {
                 || !stream.getTopic().equals(event.topic())) {
             throw new IllegalArgumentException("Stream identity binding mismatch");
         }
-        val batch = batches.findById(event.chunkId()).orElseGet(() ->
+        val existingBatch = batches.findById(event.chunkId());
+        if (existingBatch.isEmpty()
+                && stream.getEntity().getStatus() != EntityStatus.ACTIVE) {
+            throw new IllegalArgumentException("Entity UUID is retired for new stream chunks");
+        }
+        val batch = existingBatch.orElseGet(() ->
                 batches.save(IngestionStreamBatchModel.builder()
                         .chunkId(event.chunkId()).stream(stream)
                         .sequenceNumber(event.sequence())
@@ -118,8 +125,8 @@ public class StreamIngestionEventConsumer {
     }
 
     private void validate(StreamIngestionDtos.StreamIngestionStatusEvent event) {
-        val expectedPrefix = "entities/" + event.entityId() + "/streams/"
-                + event.streamId() + "/";
+        val expectedPrefix = "entities/" + event.entityId() + "/dataset/part-stream-"
+                + event.streamId() + "-";
         if (!"1.0".equals(event.schemaVersion()) || event.eventId() == null
                 || event.streamId() == null || event.chunkId() == null
                 || event.entityId() == null || event.correlationId() == null

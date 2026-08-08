@@ -15,6 +15,7 @@ import io.gulay.chat.data.repository.ChatThreadRepository;
 import io.gulay.chat.dto.ChatDtos;
 import io.gulay.user.data.model.AppUserReferenceModel;
 import io.gulay.user.data.repository.AppUserReferenceRepository;
+import io.gulay.streaming.WorkspaceEventHub;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -27,6 +28,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 @RequiredArgsConstructor
@@ -37,6 +40,7 @@ public class ChatService {
     private final ChatMessageRepository messageRepository;
     private final AppUserReferenceRepository userRepository;
     private final Clock clock;
+    private final WorkspaceEventHub workspaceEvents;
 
     @Transactional
     public ChatDtos.ThreadResponse createThread(
@@ -51,7 +55,9 @@ public class ChatService {
                 .createdAt(now)
                 .updatedAt(now)
                 .build());
-        return response(thread);
+        val response = response(thread);
+        afterCommit(keycloakUserId, "chat-thread-created", response);
+        return response;
     }
 
     @Transactional(readOnly = true)
@@ -100,6 +106,7 @@ public class ChatService {
                 .findLockedByIdAndOwnerId(threadId, owner.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("Chat thread not found"));
         threadRepository.delete(thread);
+        afterCommit(keycloakUserId, "chat-thread-deleted", threadId.toString());
     }
 
     @Transactional
@@ -110,7 +117,9 @@ public class ChatService {
                 .findLockedByIdAndOwnerId(threadId, owner.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("Chat thread not found"));
         thread.rename(request.title().trim(), Instant.now(clock));
-        return response(thread);
+        val response = response(thread);
+        afterCommit(keycloakUserId, "chat-thread-renamed", response);
+        return response;
     }
 
     @Transactional
@@ -134,6 +143,7 @@ public class ChatService {
                 .role(ChatRole.ASSISTANT).content("").status(ChatMessageStatus.PENDING)
                 .characterCount(0).createdAt(now).build());
         thread.touch(now);
+        afterCommit(keycloakUserId, "chat-thread-updated", response(thread));
         return new PostedMessages(
                 new ChatDtos.PostedMessageResponse(
                         ChatDtos.VERSION, response(userMessage), response(assistant)),
@@ -222,6 +232,16 @@ public class ChatService {
                 message.getContent(), message.getProvider(), message.getModel(),
                 message.getStatus(), message.getErrorCode(), message.getCreatedAt(),
                 message.getCompletedAt());
+    }
+
+    private void afterCommit(String userSubject, String eventName, Object data) {
+        val eventId = UUID.randomUUID();
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                workspaceEvents.publishOwned(userSubject, eventId, eventName, data);
+            }
+        });
     }
 
     public record PostedMessages(

@@ -25,7 +25,7 @@ const messages = {
     loading: 'Yükleniyor…',
     retry: 'Yeniden dene',
     unavailable: 'Bu bilgi şu anda kullanılamıyor.',
-    apiUnavailable: 'Backend servisine ulaşılamadı. Kalıcı verileriniz güvende; bağlantı kurulunca yeniden yükleyin.',
+    apiUnavailable: 'Backend servisine ulaşılamıyor. Bağlantı yeniden kurulduğunda tekrar deneyin.',
     llmProviderUnavailable: 'Yapılandırılmış yapay zekâ sağlayıcısına ulaşılamıyor veya kimlik doğrulama reddedildi.',
     llmAuthenticationFailed: 'Yapay zekâ sağlayıcısı API anahtarını reddetti. Anahtarı ve API faturalandırmasını kontrol edin.',
     llmAccessDenied: 'API kimliği doğrulandı ancak yapılandırılmış modele erişim reddedildi.',
@@ -71,7 +71,7 @@ const messages = {
     allStatuses: 'Tüm durumlar',
     status: 'Durum',
     type: 'Tür',
-    entity: 'Varlık',
+    entity: 'Veri varlığı',
     requester: 'Talep eden',
     requestedAt: 'Talep zamanı',
     duration: 'Süre',
@@ -103,8 +103,8 @@ const messages = {
     timelineStageCancelled: 'İptal edildi',
     timelineStageTimedOut: 'Zaman aşımına uğradı',
     timelineStageCancellationRequested: 'İptal isteniyor',
-    governedDatasetNotFound: 'Bu varlık ve şema sürümü için tamamlanmış yönetilen veri bulunamadı.',
-    governedDatasetBindingMismatch: 'Çözümlenen veri çalışma varlığı veya şema sürümüyle eşleşmiyor.',
+    governedDatasetNotFound: 'Seçilen veri varlığı için kullanıma hazır veri bulunamadı.',
+    governedDatasetBindingMismatch: 'Çözümlenen veri, çalışma ve seçilen veri varlığıyla eşleşmiyor.',
     failureReason: 'Çalışma neden başarısız oldu?',
     sanitizedReason: 'Güvenli teknik neden',
     explanationFallback: 'LLM açıklaması üretilemedi; doğrulanmış güvenli açıklama gösteriliyor.',
@@ -146,7 +146,7 @@ const messages = {
     chartAlternative: 'Grafiğin metinsel özeti',
     entitiesTitle: 'Veri Varlıkları',
     entitiesBody: 'Raporlama ve rol tabanlı makine öğrenmesi çalışmalarında kullanılabilen veri varlıkları.',
-    schemaVersion: 'Şema sürümü',
+    schemaVersion: 'Sözleşme sürümü',
     importStatus: 'İçe aktarma durumu',
     governedRows: 'Yönetilen satırlar',
     ingesting: 'İçe aktarılıyor',
@@ -241,6 +241,23 @@ const messages = {
     ,deleteExecutionBody: 'Bu çalışma ve ilişkili sonucu kalıcı olarak silmek üzeresiniz. Çalışma geçmişi, sonuç metaverisi ve MinIO üzerindeki Parquet/model dosyaları silinir. Bu işlem geri alınamaz.'
     ,deleteExecutionFailed: 'Çalışma güvenli biçimde silinemedi. Kalıcı kayıtları korundu; yeniden deneyin.'
     ,keepExecution: 'Vazgeç'
+    ,deleteEntity: 'Veri varlığını sil'
+    ,deleteEntityTitle: 'Veri varlığı kalıcı olarak silinsin mi?'
+    ,deleteEntityBody: 'Bu veri varlığı, tüm çalışma ve sonuçları ile nesne deposundaki kaynak ve işlenmiş dosyaları kalıcı olarak silinir. UUID sonsuza kadar kullanımdan kaldırılır; aynı veya değişmiş veriler yeni bir UUID ile yeniden alınmalıdır. Yeni Kafka iletileri ve dosya bildirimleri hemen reddedilir. Bu işlem geri alınamaz.'
+    ,deleteEntityAccepted: 'Silme planlandı. Veri varlığı yeni alımlara kapatıldı ve güvenli temizlik arka planda sürüyor.'
+    ,deleteEntityFailed: 'Veri varlığı güvenli biçimde silinemedi. Yeniden deneyin.'
+    ,liveExecutionConsole: 'Canlı çalışma konsolu'
+    ,liveExecutionConsoleBody: 'Bu çalışmaya ait Spark iş, aşama ve görev ilerlemesi.'
+    ,liveConsoleButton: 'Canlı konsol'
+    ,followLatest: 'Son çıktıyı izle'
+    ,sparkConsoleWaiting: 'Spark çalışmasının başlaması bekleniyor…'
+    ,sparkExecutionStarted: 'Spark çalışması başlatıldı.'
+    ,sparkTuningStarted: 'Model seçenekleri ve ayarları karşılaştırılıyor.'
+    ,sparkTrainingStarted: 'Spark model eğitimi yürütülüyor.'
+    ,sparkResultWriting: 'Spark işlemi tamamlandı; sonuçlar yazılıyor.'
+    ,sparkConsoleFailed: 'Spark çalışması başarısız oldu.'
+    ,sparkRuntimeUnavailable: 'Spark çalışma ortamına ulaşılamıyor.'
+    ,sparkProgressMessage: 'İş: {jobs} · Aşama: {stages} · Görev: {completed}/{total} tamamlandı · {active} etkin · {failed} başarısız'
   },
   en: {
     brand: 'Kozmik Lahmacun',
@@ -264,7 +281,7 @@ const messages = {
     thinking: 'Thinking',
     retry: 'Try again',
     unavailable: 'This information is currently unavailable.',
-    apiUnavailable: 'The Backend service is unreachable. Your durable data is safe; reload when the connection returns.',
+    apiUnavailable: 'The Backend service is unavailable. Try again when the connection is restored.',
     llmProviderUnavailable: 'The configured AI provider is unreachable or rejected authentication.',
     llmAuthenticationFailed: 'The AI provider rejected the API key. Verify the key and API billing.',
     llmAccessDenied: 'The API credential was authenticated, but access to the configured model was denied.',
@@ -309,7 +326,7 @@ const messages = {
     allStatuses: 'All statuses',
     status: 'Status',
     type: 'Type',
-    entity: 'Entity',
+    entity: 'Data entity',
     requester: 'Requester',
     requestedAt: 'Requested',
     duration: 'Duration',
@@ -341,8 +358,8 @@ const messages = {
     timelineStageCancelled: 'Cancelled',
     timelineStageTimedOut: 'Timed out',
     timelineStageCancellationRequested: 'Cancellation requested',
-    governedDatasetNotFound: 'No completed governed dataset exists for this entity and schema version.',
-    governedDatasetBindingMismatch: 'The resolved dataset does not match the execution entity or schema version.',
+    governedDatasetNotFound: 'No analysis-ready data is available for the selected data entity.',
+    governedDatasetBindingMismatch: 'The resolved data does not match the execution and selected data entity.',
     failureReason: 'Why did this execution fail?',
     sanitizedReason: 'Sanitized technical reason',
     explanationFallback: 'The LLM explanation was unavailable; the verified safe fallback is shown.',
@@ -384,7 +401,7 @@ const messages = {
     chartAlternative: 'Text summary of chart',
     entitiesTitle: 'Data Entities',
     entitiesBody: 'Data entities available for reporting and role-based machine learning executions.',
-    schemaVersion: 'Schema version',
+    schemaVersion: 'Contract version',
     importStatus: 'Import status',
     governedRows: 'Governed rows',
     ingesting: 'Ingesting',
@@ -460,7 +477,7 @@ const messages = {
     ,reliability: 'Reliability and accuracy'
     ,howProduced: 'How was this produced?'
     ,executionId: 'Execution ID'
-    ,entityId: 'Entity ID'
+    ,entityId: 'Data entity ID'
     ,whatIfAnalysis: 'What-if scenario comparison'
     ,whatIfNotCausal: 'Scenario results are conditional predictions; they do not establish causal effects or guarantees.'
     ,page: 'Page'
@@ -479,6 +496,23 @@ const messages = {
     ,deleteExecutionBody: 'You are about to permanently delete this execution and its associated result. Its execution history, result metadata, and Parquet/model objects in MinIO will be removed. This action cannot be undone.'
     ,deleteExecutionFailed: 'The execution could not be deleted safely. Its durable records were retained; please try again.'
     ,keepExecution: 'Cancel'
+    ,deleteEntity: 'Delete data entity'
+    ,deleteEntityTitle: 'Permanently delete this data entity?'
+    ,deleteEntityBody: 'This permanently removes the data entity, all executions and results, and its source and processed objects. The UUID is retired forever; the same or changed data must be ingested with a new UUID. New Kafka records and object notifications are rejected immediately. This cannot be undone.'
+    ,deleteEntityAccepted: 'Deletion was scheduled. New ingestion is blocked and safe cleanup is continuing in the background.'
+    ,deleteEntityFailed: 'The data entity could not be deleted safely. Please try again.'
+    ,liveExecutionConsole: 'Live execution console'
+    ,liveExecutionConsoleBody: 'Spark job, stage, and task progress for this execution.'
+    ,liveConsoleButton: 'Live console'
+    ,followLatest: 'Follow latest'
+    ,sparkConsoleWaiting: 'Waiting for Spark execution to start…'
+    ,sparkExecutionStarted: 'Spark execution started.'
+    ,sparkTuningStarted: 'Comparing model candidates and tuning options.'
+    ,sparkTrainingStarted: 'Spark model training is running.'
+    ,sparkResultWriting: 'Spark processing completed; results are being written.'
+    ,sparkConsoleFailed: 'Spark execution failed.'
+    ,sparkRuntimeUnavailable: 'The Spark runtime is unavailable.'
+    ,sparkProgressMessage: 'Jobs: {jobs} · Stages: {stages} · Tasks: {completed}/{total} completed · {active} active · {failed} failed'
   }
 } as const;
 

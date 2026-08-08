@@ -423,6 +423,47 @@ def test_monthly_date_bucket_and_bounded_range_are_mapped_without_sql(spark):
     ]
 
 
+def test_filtered_aggregations_and_percentage_are_mapped_without_sql(spark):
+    frame = spark.createDataFrame([
+        ("WEB", True, 100), ("WEB", False, 50),
+        ("STORE", True, 80), ("STORE", True, 20),
+    ], ["channel", "confirmed", "amount"])
+    order = ReportOrder.model_validate({
+        "schemaVersion": "1.0", "executionType": "REPORT",
+        "entityId": str(uuid4()), "requestedLanguage": "en",
+        "requestSummary": "Confirmed percentage by channel",
+        "constraints": {"maxPreviewRows": 100, "timeoutSeconds": 30},
+        "payload": {
+            "select": [{"column": "channel"}], "filters": [],
+            "groupBy": ["channel"], "aggregations": [
+                {"function": "COUNT", "alias": "total_count"},
+                {"function": "COUNT", "alias": "confirmed_count", "filter": {
+                    "type": "CONDITION", "column": "confirmed", "operator": "EQ",
+                    "value": True,
+                }},
+                {"function": "SUM", "column": "amount", "alias": "confirmed_amount",
+                 "filter": {"type": "CONDITION", "column": "confirmed",
+                            "operator": "EQ", "value": True}},
+            ],
+            "calculatedMetrics": [{
+                "operation": "PERCENTAGE", "numerator": "confirmed_count",
+                "denominator": "total_count", "alias": "confirmed_percentage",
+            }],
+            "orderBy": [{"column": "confirmed_percentage", "direction": "DESC"}],
+            "limit": 100, "chartHints": [],
+        },
+    })
+
+    rows = [row.asDict() for row in SparkReportExecutor.map_order(frame, order).collect()]
+
+    assert rows == [
+        {"channel": "STORE", "total_count": 2, "confirmed_count": 2,
+         "confirmed_amount": 100, "confirmed_percentage": 100.0},
+        {"channel": "WEB", "total_count": 2, "confirmed_count": 1,
+         "confirmed_amount": 100, "confirmed_percentage": 50.0},
+    ]
+
+
 def test_utc_timestamp_boundaries_are_deterministic(spark):
     frame = spark.createDataFrame([
         (datetime(2026, 6, 30, 23, 59, 59, tzinfo=timezone.utc), 10),
@@ -479,3 +520,93 @@ def test_scalar_aggregate_facts_are_complete_result_only():
     assert SparkReportExecutor._report_measure_results(
         order, 2, [{"total_charge": 42}],
     ) == []
+
+
+def test_numeric_ranges_are_mapped_to_governed_spark_buckets(spark):
+    frame = spark.createDataFrame([
+        (59.9, 100.0), (60.0, 200.0), (69.9, 300.0),
+        (70.0, 400.0), (90.0, 500.0), (None, 600.0),
+    ], ["performance_score", "annual_salary"])
+    order = ReportOrder.model_validate({
+        "schemaVersion": "1.0", "executionType": "REPORT",
+        "entityId": str(uuid4()), "requestedLanguage": "en",
+        "requestSummary": "Employees by performance range",
+        "constraints": {"maxPreviewRows": 100, "timeoutSeconds": 30},
+        "payload": {
+            "select": [{"column": "performance_score", "alias": "performance_range"}],
+            "filters": [], "groupBy": [], "temporalGroupBy": [],
+            "numericRangeGroupBy": [{
+                "column": "performance_score", "alias": "performance_range",
+                "buckets": [
+                    {"label": "Below 60", "upperBound": 60},
+                    {"label": "60-69", "lowerBound": 60, "upperBound": 70},
+                    {"label": "70-89", "lowerBound": 70, "upperBound": 90},
+                    {"label": "90 or above", "lowerBound": 90},
+                ],
+            }],
+            "aggregations": [
+                {"function": "COUNT", "alias": "employee_count"},
+                {"function": "AVG", "column": "annual_salary",
+                 "alias": "avg_annual_salary"},
+            ],
+            "calculatedMetrics": [], "having": None,
+            "orderBy": [{"column": "performance_range", "direction": "ASC"}],
+            "limit": 100, "chartHints": [],
+        },
+    })
+
+    rows = [
+        row.asDict() for row in SparkReportExecutor.map_order(frame, order).collect()
+    ]
+
+    assert rows == [
+        {"performance_range": None, "employee_count": 1,
+         "avg_annual_salary": 600.0},
+        {"performance_range": "60-69", "employee_count": 2,
+         "avg_annual_salary": 250.0},
+        {"performance_range": "70-89", "employee_count": 1,
+         "avg_annual_salary": 400.0},
+        {"performance_range": "90 or above", "employee_count": 1,
+         "avg_annual_salary": 500.0},
+        {"performance_range": "Below 60", "employee_count": 1,
+         "avg_annual_salary": 100.0},
+    ]
+
+
+def test_core_transformations_statistics_and_distinct_are_executed_by_spark(spark):
+    frame = spark.createDataFrame([
+        (" north ", 10.0, 2.0, date(2026, 1, 1), None),
+        ("NORTH", 20.0, 4.0, date(2026, 1, 3), "x"),
+        ("south", 30.0, 0.0, date(2026, 2, 1), None),
+    ], ["region", "amount", "quantity", "sale_date", "note"])
+    order = ReportOrder.model_validate({
+        "schemaVersion": "1.0", "executionType": "REPORT",
+        "entityId": str(uuid4()), "requestedLanguage": "en",
+        "requestSummary": "Core operations",
+        "constraints": {"maxPreviewRows": 100, "timeoutSeconds": 30},
+        "payload": {
+            "select": [{"column": "region_upper"}], "distinct": True,
+            "derivedFields": [
+                {"operation": "TRIM", "column": "region", "alias": "region_trimmed"},
+                {"operation": "UPPER", "column": "region_trimmed", "alias": "region_upper"},
+                {"operation": "DIVIDE", "column": "amount",
+                 "operandColumn": "quantity", "alias": "amount_per_item"},
+                {"operation": "MONTH", "column": "sale_date", "alias": "sale_month"},
+                {"operation": "COALESCE", "column": "note",
+                 "operandValue": "missing", "alias": "safe_note"},
+            ],
+            "filters": [], "groupBy": ["region_upper"],
+            "aggregations": [
+                {"function": "MEDIAN", "column": "amount_per_item", "alias": "median_value"},
+                {"function": "STDDEV", "column": "amount", "alias": "amount_stddev"},
+            ],
+            "orderBy": [{"column": "region_upper", "direction": "ASC"}],
+            "limit": 10, "chartHints": [],
+        },
+    })
+
+    rows = [row.asDict() for row in SparkReportExecutor.map_order(frame, order).collect()]
+
+    assert [row["region_upper"] for row in rows] == ["NORTH", "SOUTH"]
+    assert rows[0]["median_value"] == 5.0
+    assert rows[1]["median_value"] is None

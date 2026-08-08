@@ -91,6 +91,11 @@ class ResultExplainer:
         information = {
             key: value for key, value in result.items() if key not in excluded
         }
+        # Preview rows are the canonical row-shaped evidence when the complete
+        # result fits the <=100 contract. Charts and reportBreakdown repeat the
+        # same values in alternate presentation shapes, so retain their
+        # metadata/comparisons without sending duplicate rows to the provider.
+        information = ResultExplainer._without_row_shaped_evidence(information)
         return to_jsonable_python({
             "requestedLanguage": command.order.requested_language,
             "originalRequest": command.original_request or command.order.request_summary,
@@ -102,6 +107,28 @@ class ResultExplainer:
             "resultInformation": information,
             "resultRows": rows if total_row_count <= 100 else None,
         })
+
+    @staticmethod
+    def _without_row_shaped_evidence(information: dict[str, Any]) -> dict[str, Any]:
+        """Keep calculated facts while removing duplicated large row collections."""
+        bounded = dict(information)
+        charts = bounded.get("charts")
+        if isinstance(charts, list):
+            bounded["charts"] = [
+                {
+                    key: value for key, value in chart.items()
+                    if key not in {"categories", "series"}
+                }
+                for chart in charts
+                if isinstance(chart, dict)
+            ]
+        facts = bounded.get("summaryFacts")
+        if isinstance(facts, dict):
+            bounded["summaryFacts"] = {
+                key: value for key, value in facts.items()
+                if key != "reportBreakdown"
+            }
+        return bounded
 
     @staticmethod
     def _system_prompt(language: str) -> str:

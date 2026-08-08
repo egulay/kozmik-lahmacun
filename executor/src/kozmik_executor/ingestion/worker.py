@@ -176,6 +176,28 @@ class SparkCsvIngester:
         return await asyncio.to_thread(
             run_spark_operation, "schema-discovery", self._discover, bucket, key)
 
+    @staticmethod
+    def _csv_reader(spark, *, infer_schema: bool = False):
+        """Build an RFC 4180-compatible reader for governed CSV ingestion.
+
+        Python and most CSV producers escape a quote inside a quoted field by
+        doubling it. Spark defaults to backslash escaping, which rejects valid
+        JSON transported inside CSV cells unless the escape character is made
+        explicit. Multiline support also permits governed string values that
+        legitimately contain line breaks.
+        """
+        reader = (
+            spark.read
+            .option("header", True)
+            .option("mode", "FAILFAST")
+            .option("quote", '"')
+            .option("escape", '"')
+            .option("multiLine", True)
+        )
+        if infer_schema:
+            reader = reader.option("inferSchema", True).option("samplingRatio", 0.1)
+        return reader
+
     def _discover(self, bucket: str, key: str) -> list[IngestionColumn]:
         with tempfile.TemporaryDirectory(prefix="kozmik-discovery-") as directory:
             source = Path(directory) / "source.csv"
@@ -187,8 +209,7 @@ class SparkCsvIngester:
             finally:
                 response.close()
                 response.release_conn()
-            frame = (self.spark.read.option("header", True).option("inferSchema", True)
-                     .option("samplingRatio", 0.1).csv(str(source)))
+            frame = self._csv_reader(self.spark, infer_schema=True).csv(str(source))
             reverse_types = (
                 (spark_types.BooleanType, "BOOLEAN"),
                 (spark_types.IntegerType, "INTEGER"),
@@ -241,7 +262,7 @@ class SparkCsvIngester:
             finally:
                 response.close()
                 response.release_conn()
-            raw = self.spark.read.option("header", True).option("mode", "FAILFAST").csv(str(source))
+            raw = self._csv_reader(self.spark).csv(str(source))
             expected = [item.column_name for item in schema.columns]
             if raw.columns != expected:
                 raise ValueError("SCHEMA_MISMATCH")
@@ -253,8 +274,8 @@ class SparkCsvIngester:
             governed = raw.select(*expressions)
             rows = governed.count()
             object_key = (
-                f"entities/{schema.entity_id}/imports/{import_id}/"
-                "data.parquet"
+                f"entities/{schema.entity_id}/dataset/"
+                f"part-file-{import_id}.parquet"
             )
             size = write_parquet_artifact(
                 governed, self.minio, "refined", object_key)
@@ -329,6 +350,17 @@ class IngestionProcessor:
                               ))
             raise
 
+    async def publish_terminal_failure(
+        self, source_event_id, key, entity_id, error_code="IMPORT_FAILED",
+    ) -> None:
+        """Publish a terminal status after infrastructure retries are exhausted."""
+        import_id = uuid5(NAMESPACE, f"import:{source_event_id}")
+        await self._event(
+            import_id, source_event_id, entity_id, key, str(import_id),
+            "FAILED", "FAILED", "IMPORT_FAILED", error_code=error_code,
+            error_message="Import failed after the configured retry attempts",
+        )
+
     async def _event(
         self, import_id, source_event_id, entity_id, key, correlation, stage, status, code,
         rows=None, refined_bucket=None, refined_key=None,
@@ -401,8 +433,11 @@ class KafkaIngestionWorker:
             return True
         except Exception:
             logger.exception("ingestion_failed code=IMPORT_FAILED")
-            if self.ledger.failed_attempt(source_event_id) >= 3:
+            attempt_count = self.ledger.failed_attempt(source_event_id)
+            if attempt_count >= 3:
                 logger.error("ingestion_dead_lettered eventId=%s", source_event_id)
+                await self.processor.publish_terminal_failure(
+                    source_event_id, key, entity_id)
                 await self.producer.send_and_wait(self.dlt, payload)
                 self.ledger.complete(source_event_id)
                 return True

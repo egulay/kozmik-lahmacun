@@ -141,6 +141,43 @@ def test_boolean_source_column_is_allowed_only_as_binary_classification_target()
     assert "TARGET_NOT_ALLOWED" in {issue.code for issue in error.value.issues}
 
 
+def test_all_authorized_source_types_can_be_features_and_filters():
+    planning = request()
+    planning.authorized_schema.columns.extend([
+        AuthorizedColumn.model_validate({
+            "columnName": "segment", "businessName": "Segment", "dataType": "STRING",
+        }),
+        AuthorizedColumn.model_validate({
+            "columnName": "confirmed", "businessName": "Confirmed", "dataType": "BOOLEAN",
+        }),
+        AuthorizedColumn.model_validate({
+            "columnName": "business_date", "businessName": "Business date",
+            "dataType": "DATE",
+        }),
+        AuthorizedColumn.model_validate({
+            "columnName": "event_time", "businessName": "Event time",
+            "dataType": "TIMESTAMP",
+        }),
+    ])
+    raw = order(planning).model_dump(by_alias=True, mode="json")
+    raw["payload"].update({
+        "featureColumns": [
+            "units", "segment", "confirmed", "business_date", "event_time",
+        ],
+        "categoricalFeatureColumns": ["segment"],
+        "filters": [
+            {"column": "segment", "operator": "EQ", "value": "A"},
+            {"column": "confirmed", "operator": "EQ", "value": True},
+            {"column": "business_date", "operator": "BETWEEN",
+             "values": ["2026-01-01", "2026-12-31"]},
+            {"column": "event_time", "operator": "GTE",
+             "value": "2026-01-01T00:00:00Z"},
+        ],
+    })
+
+    validate_ml_order(MlOrder.model_validate(raw), planning)
+
+
 def test_what_if_validation_allows_only_governed_numeric_features():
     planning = request()
     value = order(planning).model_dump(by_alias=True, mode="json")
@@ -208,16 +245,29 @@ def test_unrequested_what_if_analysis_is_removed():
 
 def test_ml_features_are_limited_to_supported_authorized_columns():
     planning = request()
+    planning.authorized_schema.columns.extend([
+        AuthorizedColumn.model_validate({
+            "columnName": "confirmed", "businessName": "Confirmed", "dataType": "BOOLEAN",
+        }),
+        AuthorizedColumn.model_validate({
+            "columnName": "event_time", "businessName": "Event time",
+            "dataType": "TIMESTAMP",
+        }),
+    ])
     raw = {
         "payload": {
             "targetColumn": "revenue",
-            "featureColumns": ["units", "unknown", "revenue", "units", "price"],
+            "featureColumns": [
+                "units", "unknown", "revenue", "units", "price", "confirmed", "event_time",
+            ],
         },
     }
 
     _normalize_ml_features(raw, planning)
 
-    assert raw["payload"]["featureColumns"] == ["units", "price"]
+    assert raw["payload"]["featureColumns"] == [
+        "units", "price", "confirmed", "event_time",
+    ]
 
 
 def test_ml_features_exclude_the_derived_target_source():

@@ -15,6 +15,9 @@ public interface BusinessEntityRepository extends JpaRepository<BusinessEntityMo
 
     Page<BusinessEntityModel> findByStatus(EntityStatus status, Pageable pageable);
 
-    @Query("select count(distinct c.entity.id) from EntityColumnModel c")
+    Page<BusinessEntityModel> findByStatusNot(EntityStatus status, Pageable pageable);
+
+    @Query("select count(distinct c.entity.id) from EntityColumnModel c "
+            + "where c.entity.status <> io.gulay.entity.data.model.EntityStatus.DELETION_PENDING")
     long countWithRegisteredSchema();
 }

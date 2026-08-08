@@ -122,6 +122,65 @@ def test_worker_skips_summary_provider_when_summary_was_excluded():
     assert "SUMMARIZING" not in [item.stage for item in statuses]
 
 
+def test_spark_tracker_snapshot_is_published_as_execution_console_event():
+    class JobInfo:
+        stageIds = [4, 5]
+        status = "RUNNING"
+
+    class StageInfo:
+        numTasks = 10
+        numCompletedTasks = 6
+        numActiveTasks = 3
+        numFailedTasks = 1
+
+    class Tracker:
+        def getJobIdsForGroup(self, _group):
+            return [7]
+
+        def getJobInfo(self, _job_id):
+            return JobInfo()
+
+        def getStageInfo(self, _stage_id):
+            return StageInfo()
+
+    class SparkContext:
+        def statusTracker(self):
+            return Tracker()
+
+    class Spark:
+        sparkContext = SparkContext()
+
+    class Executor:
+        spark = Spark()
+
+    statuses = []
+
+    async def status(event):
+        statuses.append(event)
+
+    async def result(_event):
+        pass
+
+    async def run_monitor():
+        stop = asyncio.Event()
+        worker = TrustedReportWorker(status, result, Executor())
+        task = asyncio.create_task(worker._monitor_spark(command(), Executor(), stop))
+        await asyncio.sleep(0.01)
+        stop.set()
+        await task
+
+    asyncio.run(run_monitor())
+
+    assert len(statuses) == 1
+    assert statuses[0].message_code == "EXECUTION_SPARK_PROGRESS"
+    assert statuses[0].details == {
+        "engine": "spark", "consoleEvent": True,
+        "jobCount": 1, "activeJobs": 1, "stageCount": 2,
+        "totalTasks": 20, "completedTasks": 12,
+        "activeTasks": 6, "failedTasks": 2,
+    }
+
+
 def test_artifact_retention_is_executed_by_python_and_reports_success(tmp_path):
     class FakeMinio:
         def __init__(self):

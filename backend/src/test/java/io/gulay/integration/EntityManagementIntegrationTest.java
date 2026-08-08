@@ -4,9 +4,12 @@ import lombok.val;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.verify;
 
 import io.gulay.api.ConflictException;
 import io.gulay.entity.data.model.ColumnDataType;
+import io.gulay.entity.client.EntityArtifactDeletionClient;
+import io.gulay.entity.data.service.EntityDeletionService;
 import io.gulay.entity.data.service.EntityManagementService;
 import io.gulay.entity.dto.EntityDtos;
 import io.gulay.security.PlatformRole;
@@ -58,10 +61,12 @@ class EntityManagementIntegrationTest {
     }
 
     @Autowired EntityManagementService service;
+    @Autowired EntityDeletionService deletionService;
     @Autowired AppUserReferenceRepository users;
     @MockitoBean org.springframework.security.oauth2.jwt.JwtDecoder jwtDecoder;
     @MockitoBean org.springframework.security.oauth2.client.registration.ClientRegistrationRepository
             clientRegistrationRepository;
+    @MockitoBean EntityArtifactDeletionClient artifactDeletionClient;
 
     private AppUserReferenceModel reporter;
 
@@ -131,6 +136,20 @@ class EntityManagementIntegrationTest {
 
         assertThat(schema.columns().get(0).categoricalValues())
                 .containsExactly("PARTNER", "STORE", "WEB");
+    }
+
+    @Test
+    void deletionPermanentlyRetiresUuidAndRemovesEntityArtifactsAndMetadata() {
+        val id = UUID.randomUUID();
+        service.resolveOrRegisterStreamEntity(descriptor(id, ColumnDataType.DECIMAL));
+
+        assertThat(deletionService.delete(id, reporter.getKeycloakUserId(), "delete-test"))
+                .isTrue();
+        verify(artifactDeletionClient).delete(id, "delete-test");
+        assertThatThrownBy(() -> service.resolveOrRegisterStreamEntity(
+                descriptor(id, ColumnDataType.DECIMAL)))
+                .isInstanceOf(ConflictException.class)
+                .hasMessageContaining("retired");
     }
 
     private EntityDtos.StreamEntityDescriptor descriptor(

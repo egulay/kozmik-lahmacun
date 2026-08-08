@@ -31,6 +31,7 @@
   import ProgressStageIcon from '$lib/components/ProgressStageIcon.svelte';
   import MarkdownMessage from '$lib/components/MarkdownMessage.svelte';
   import ExecutionTypeIcon from '$lib/components/ExecutionTypeIcon.svelte';
+  import { lifecycleTimeline } from '$lib/execution-timeline';
   import type { Execution } from '$lib/types';
   import {
     formatDate,
@@ -157,7 +158,9 @@
   const columnLabels = $derived(normalizeColumnLabels(previewData));
   const charts = $derived(normalizeCharts(result?.charts));
   const isMl = $derived(Boolean(execution?.executionType?.toUpperCase().includes('ML') || metrics.length));
-  const timelineHistory = $derived(execution?.history?.toReversed() ?? []);
+  const timelineHistory = $derived(
+    execution ? lifecycleTimeline(execution.history, execution.executionType) : []
+  );
   const orderPayload = $derived.by(() => {
     const payload = execution?.order?.payload;
     return payload && typeof payload === 'object'
@@ -628,9 +631,8 @@
   }
 </script>
 
-<div class="pdf-document">
 <div class="pdf-brand"><strong>{$t('brand')}</strong><span>{$t('governedAnalytics')}</span></div>
-<PageHeader title={$t('resultTitle')} description={result?.executionId}>
+<PageHeader title={$t('resultTitle')} description={result?.executionId} sticky>
   {#snippet icon()}
     {#if execution}
       <ExecutionTypeIcon
@@ -653,6 +655,7 @@
     </div>
   {/snippet}
 </PageHeader>
+<div class="pdf-document">
 <StateView loading={loading && !execution && !result} {error} onretry={() => load($page.params.id!)} />
 {#if execution?.status === 'FAILED'}
   <Card.Root class="mb-4">

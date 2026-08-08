@@ -62,7 +62,7 @@ public class GovernedDatasetResolutionService {
                 .findFirstByEntityIdAndLastSequenceIsNotNullAndLastOffsetIsNotNullOrderByUpdatedAtDesc(
                         entityId)
                 .orElseThrow(() -> new ResourceNotFoundException(
-                        "No governed dataset is available for the execution schema"));
+                        "No analysis-ready data is available for the selected data entity"));
         val binding = ExecutionStreamBindingModel.builder()
                 .executionId(executionId).stream(stream)
                 .throughSequence(stream.getLastSequence())
@@ -81,7 +81,7 @@ public class GovernedDatasetResolutionService {
                 || !"COMPLETED".equals(dataset.getStatus())) {
             throw new IllegalStateException("Persisted dataset binding is invalid");
         }
-        val expectedPrefix = "entities/" + entityId + "/imports/" + dataset.getId() + "/";
+        val expectedPrefix = "entities/" + entityId + "/dataset/part-file-";
         val parquetObject = dataset.getRefinedObjectKey().endsWith(".parquet");
         if (!"refined".equals(dataset.getRefinedBucket())
                 || !dataset.getRefinedObjectKey().startsWith(expectedPrefix)
@@ -93,9 +93,9 @@ public class GovernedDatasetResolutionService {
         try {
             return new GovernedDatasetDtos.GovernedDatasetResponse(
                     "1.0", execution.getId(), entityId, dataset.getId(),
-                    null, null, "PARQUET",
-                    dataset.getRefinedBucket(), dataset.getRefinedObjectKey(),
-                    dataset.getRowCount(), execution.getExecutionType(),
+                    null, null, "PARQUET_DATASET",
+                    dataset.getRefinedBucket(), unifiedDatasetKey(entityId),
+                    cumulativeRows(entityId), execution.getExecutionType(),
                     execution.getOwner().getId(),
                     mapper.readTree(execution.getExecutionOrderJson()),
                     mapper.readTree(execution.getAuthorizationSnapshot()),
@@ -113,12 +113,12 @@ public class GovernedDatasetResolutionService {
                 || binding.getThroughSequence() < 0 || binding.getThroughOffset() < 0) {
             throw new IllegalStateException("Persisted stream binding is invalid");
         }
-        val key = "entities/" + entityId + "/streams/" + stream.getId() + "/dataset";
+        val key = unifiedDatasetKey(entityId);
         try {
             return new GovernedDatasetDtos.GovernedDatasetResponse(
                     "1.0", execution.getId(), entityId, null,
                     stream.getId(), binding.getThroughSequence(), "PARQUET_DATASET",
-                    "refined", key, binding.getSnapshotRowCount(),
+                    "refined", key, cumulativeRows(entityId),
                     execution.getExecutionType(), execution.getOwner().getId(),
                     mapper.readTree(execution.getExecutionOrderJson()),
                     mapper.readTree(execution.getAuthorizationSnapshot()),
@@ -126,5 +126,13 @@ public class GovernedDatasetResolutionService {
         } catch (Exception exception) {
             throw new IllegalStateException("Stored execution context is invalid", exception);
         }
+    }
+
+    private String unifiedDatasetKey(UUID entityId) {
+        return "entities/" + entityId + "/dataset";
+    }
+
+    private long cumulativeRows(UUID entityId) {
+        return imports.completedRows(entityId) + streams.completedRows(entityId);
     }
 }

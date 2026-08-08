@@ -108,8 +108,11 @@ class SparkStreamChunkIngester:
                 column.column_name))
         governed = raw.select(*expressions)
         rows = governed.count()
-        dataset_prefix = f"entities/{schema.entity_id}/streams/{chunk.stream_id}/dataset"
-        object_key = f"{dataset_prefix}/part-{chunk.sequence:012d}-{chunk.chunk_id}.parquet"
+        dataset_prefix = f"entities/{schema.entity_id}/dataset"
+        object_key = (
+            f"{dataset_prefix}/part-stream-{chunk.stream_id}-"
+            f"{chunk.sequence:012d}-{chunk.chunk_id}.parquet"
+        )
         write_parquet_artifact(governed, self.minio, "refined", object_key)
         return rows, object_key
 
@@ -128,8 +131,8 @@ class StreamIngestionProcessor:
         if self.ledger.completed(chunk.chunk_id):
             schema = await self.schema_client.resolve(chunk.entity)
             object_key = (
-                f"entities/{schema.entity_id}/streams/{chunk.stream_id}/dataset/"
-                f"part-{chunk.sequence:012d}-{chunk.chunk_id}.parquet")
+                f"entities/{schema.entity_id}/dataset/part-stream-{chunk.stream_id}-"
+                f"{chunk.sequence:012d}-{chunk.chunk_id}.parquet")
             await self._event(
                 chunk, correlation, kafka_partition, kafka_offset,
                 "COMPLETED", "COMPLETED", "IMPORT_COMPLETED",

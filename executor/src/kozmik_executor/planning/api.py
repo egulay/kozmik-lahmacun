@@ -63,6 +63,22 @@ async def _generate_report_order(
     provider, request: ReportPlanningRequest, max_preview_rows: int = 100,
     timeout_seconds: int = 7200,
 ) -> ReportOrder:
+    unsupported = re.search(
+        r"\b(?:running total|cumulative total|moving average|rolling average|"
+        r"lag|lead|pivot|cross[- ]?tab|rank within|top \d+ (?:within|per)|"
+        r"kümülatif toplam|birikimli toplam|hareketli ortalama|kayan ortalama|"
+        r"pivot|çapraz tablo|grup içi sıra)\b",
+        request.user_request.casefold(),
+    )
+    if unsupported:
+        raise PlanningValidationError([ValidationIssue(
+            code="REPORT_OPERATION_NOT_SUPPORTED",
+            path="userRequest",
+            message=(
+                f"The requested operation '{unsupported.group(0)}' is not available in "
+                "the governed single-entity reporting contract"
+            ),
+        )])
     base_prompt = build_prompt(request)
     prompt = base_prompt
     last_exception: ValidationError | PlanningValidationError | None = None
@@ -73,9 +89,12 @@ async def _generate_report_order(
             _normalize_order_identifiers(raw)
             _normalize_between_filters(raw)
             _normalize_explicit_temporal_grouping(raw)
+            _normalize_explicit_numeric_range_grouping(raw)
             _normalize_implicit_temporal_grouping(raw, request)
             _normalize_temporal_labels(raw, request.requested_language)
+            _normalize_derived_field_grouping(raw)
             _normalize_group_by_aliases(raw)
+            _remove_unrequested_ordering(raw, request.user_request)
             order = ReportOrder.model_validate(raw)
             validate_order(order, request)
             return order
@@ -126,7 +145,8 @@ def _normalize_order_identifiers(raw: object) -> None:
 
     collections = (
         payload.get("select"), payload.get("aggregations"),
-        payload.get("temporalGroupBy"),
+        payload.get("temporalGroupBy"), payload.get("numericRangeGroupBy"),
+        payload.get("derivedFields"), payload.get("calculatedMetrics"),
     )
     for collection in collections:
         if isinstance(collection, list):
@@ -177,6 +197,26 @@ def _normalize_order_identifiers(raw: object) -> None:
             if not isinstance(item, dict):
                 continue
             for key in ("column", "categoryColumn", "valueColumn"):
+                value = item.get(key)
+                if isinstance(value, str):
+                    item[key] = replacements.get(value, value)
+
+    calculated = payload.get("calculatedMetrics")
+    if isinstance(calculated, list):
+        for item in calculated:
+            if not isinstance(item, dict):
+                continue
+            for key in ("numerator", "denominator"):
+                value = item.get(key)
+                if isinstance(value, str):
+                    item[key] = replacements.get(value, value)
+
+    derived = payload.get("derivedFields")
+    if isinstance(derived, list):
+        for item in derived:
+            if not isinstance(item, dict):
+                continue
+            for key in ("column", "operandColumn"):
                 value = item.get(key)
                 if isinstance(value, str):
                     item[key] = replacements.get(value, value)
@@ -285,6 +325,46 @@ def _normalize_explicit_temporal_grouping(raw: object) -> None:
         source_selections[0]["alias"] = alias
         if temporal.get("displayLabel"):
             source_selections[0]["displayLabel"] = temporal["displayLabel"]
+        payload["groupBy"] = [
+            value for value in payload["groupBy"]
+            if value != source and value != alias
+        ]
+
+
+def _normalize_explicit_numeric_range_grouping(raw: object) -> None:
+    """Make a governed numeric range the selected and grouped output."""
+    if not isinstance(raw, dict):
+        return
+    payload = raw.get("payload")
+    if not isinstance(payload, dict):
+        return
+    range_groups = payload.get("numericRangeGroupBy")
+    selected = payload.get("select")
+    group_by = payload.get("groupBy")
+    if (
+        not isinstance(range_groups, list)
+        or not isinstance(selected, list)
+        or not isinstance(group_by, list)
+    ):
+        return
+    for range_group in range_groups:
+        if not isinstance(range_group, dict):
+            continue
+        source = range_group.get("column")
+        alias = range_group.get("alias")
+        if not isinstance(source, str) or not isinstance(alias, str):
+            continue
+        source_selections = [
+            item for item in selected
+            if isinstance(item, dict)
+            and (item.get("column") == source or item.get("alias") == alias)
+        ]
+        if len(source_selections) != 1:
+            continue
+        source_selections[0]["column"] = source
+        source_selections[0]["alias"] = alias
+        if range_group.get("displayLabel"):
+            source_selections[0]["displayLabel"] = range_group["displayLabel"]
         payload["groupBy"] = [
             value for value in payload["groupBy"]
             if value != source and value != alias
@@ -422,12 +502,19 @@ def _normalize_group_by_aliases(raw: object) -> None:
     group_by = payload.get("groupBy")
     if not isinstance(selected, list) or not isinstance(group_by, list):
         return
+    protected_aliases = {
+        item.get("alias")
+        for field in ("derivedFields", "temporalGroupBy", "numericRangeGroupBy")
+        for item in payload.get(field, [])
+        if isinstance(item, dict) and isinstance(item.get("alias"), str)
+    }
     aliases = {
         item["alias"]: item["column"]
         for item in selected
         if isinstance(item, dict)
         and isinstance(item.get("alias"), str)
         and isinstance(item.get("column"), str)
+        and item["alias"] not in protected_aliases
     }
     normalized: list[object] = []
     for value in group_by:
@@ -435,6 +522,102 @@ def _normalize_group_by_aliases(raw: object) -> None:
         if resolved not in normalized:
             normalized.append(resolved)
     payload["groupBy"] = normalized
+
+
+def _normalize_derived_field_grouping(raw: object) -> None:
+    """Select a grouped derived alias instead of its untransformed source column."""
+    if not isinstance(raw, dict):
+        return
+    payload = raw.get("payload")
+    if not isinstance(payload, dict):
+        return
+    derived = payload.get("derivedFields")
+    selected = payload.get("select")
+    group_by = payload.get("groupBy")
+    if not all(isinstance(value, list) for value in (derived, selected, group_by)):
+        return
+
+    grouped = set(group_by)
+    lineage = {
+        item.get("alias"): item.get("column")
+        for item in derived
+        if isinstance(item, dict)
+        and isinstance(item.get("alias"), str)
+        and isinstance(item.get("column"), str)
+    }
+
+    def root_source(name: str) -> str:
+        visited: set[str] = set()
+        while name in lineage and name not in visited:
+            visited.add(name)
+            name = lineage[name]
+        return name
+
+    for field in derived:
+        if not isinstance(field, dict):
+            continue
+        source = field.get("column")
+        alias = field.get("alias")
+        if not isinstance(source, str) or not isinstance(alias, str) or alias not in grouped:
+            continue
+        source_selections = [
+            item for item in selected
+            if isinstance(item, dict)
+            and isinstance(item.get("column"), str)
+            and root_source(item["column"]) == root_source(alias)
+        ]
+        alias_selections = [
+            item for item in selected
+            if isinstance(item, dict)
+            and (item.get("column") == alias or item.get("alias") == alias)
+        ]
+        if len(source_selections) != 1 or alias_selections:
+            continue
+        source_selections[0]["column"] = alias
+        source_selections[0]["alias"] = alias
+        if field.get("displayLabel"):
+            source_selections[0]["displayLabel"] = field["displayLabel"]
+        logger.info(
+            "report_order_derived_group_selection_normalized source=%s alias=%s",
+            source,
+            alias,
+        )
+
+
+def _remove_unrequested_ordering(raw: object, user_request: str) -> None:
+    """Discard only unavailable invented sorts when ordering was not requested."""
+    if not isinstance(raw, dict):
+        return
+    payload = raw.get("payload")
+    if not isinstance(payload, dict) or not payload.get("orderBy"):
+        return
+    ordering_requested = re.search(
+        r"\b(?:order(?:ed)?|sort(?:ed)?|ascending|descending|chronological|"
+        r"highest|lowest|largest|smallest|top|bottom|rank|"
+        r"s[ıi]rala(?:nmış)?|artan|azalan|kronolojik|en yüksek|en düşük|"
+        r"en büyük|en küçük)\b",
+        user_request.casefold(),
+    )
+    if ordering_requested is None:
+        output_names = {
+            item.get("alias") or item.get("column")
+            for field in ("select", "aggregations", "calculatedMetrics")
+            for item in payload.get(field, [])
+            if isinstance(item, dict)
+        }
+        output_names.update(
+            item.get("alias")
+            for field in ("temporalGroupBy", "numericRangeGroupBy")
+            for item in payload.get(field, [])
+            if isinstance(item, dict)
+        )
+        original = payload["orderBy"]
+        payload["orderBy"] = [
+            item for item in original
+            if isinstance(item, dict) and item.get("column") in output_names
+        ]
+        if len(payload["orderBy"]) != len(original):
+            logger.info("report_order_unrequested_unavailable_ordering_removed")
 
 
 async def _generate_ml_order(
@@ -566,7 +749,7 @@ def _remove_unrequested_what_if(raw: object, user_request: str) -> None:
 
 
 def _normalize_ml_features(raw: object, request: ReportPlanningRequest) -> None:
-    """Drop unsupported or duplicate features without relaxing governed validation."""
+    """Drop unauthorized or duplicate features without narrowing source data types."""
     if not isinstance(raw, dict):
         return
     payload = raw.get("payload")
@@ -584,7 +767,6 @@ def _normalize_ml_features(raw: object, request: ReportPlanningRequest) -> None:
     supported = {
         column.column_name
         for column in request.authorized_schema.columns
-        if column.data_type.value in {"INTEGER", "LONG", "DECIMAL", "STRING"}
     }
     normalized: list[str] = []
     for value in features:

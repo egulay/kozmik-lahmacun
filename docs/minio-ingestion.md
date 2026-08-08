@@ -22,7 +22,12 @@ registered Spark types. String values are trimmed and empty values become null.
 The platform ingests supplied values without a stored nullability policy. Failed
 type casts become null. Governed Parquet is written to:
 
-`refined/entities/{entityId}/imports/{importId}/data.parquet`
+`refined/entities/{entityId}/dataset/part-file-{importId}.parquet`
+
+Every completed direct CSV import appends one immutable part to the entity-level
+Parquet dataset. Uploading another schema-compatible file with the same entity
+UUID therefore extends the same analytical dataset; it does not replace the
+previous batch.
 
 Import lifecycle events are persisted by Java in `import_job` and
 `import_status_history`. Re-delivered MinIO and status events are idempotent.

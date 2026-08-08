@@ -6,7 +6,8 @@ python3 "${REPOSITORY_ROOT}/demo/generate_data.py" \
   --output "${REPOSITORY_ROOT}/demo/generated" \
   --cdr-rows 1000000 \
   --sales-rows 50000 \
-  --payment-rows 100000
+  --payment-rows 100000 \
+  --employee-rows 50000
 python3 - "${REPOSITORY_ROOT}/demo/generated" <<'PY'
 import csv
 import pathlib
@@ -21,6 +22,7 @@ for path in files:
 assert counts["cdr.csv"] == 1_000_000, counts
 assert counts["sales_11111111-1111-4111-8111-111111111111_20260728.csv"] == 50_000
 assert counts["payment_transactions_33333333-3333-4333-8333-333333333333_20260728.csv"] == 100_000
+assert counts["employee_records_44444444-4444-4444-8444-444444444444_20260728.csv"] == 50_000
 print("Demo dataset acceptance passed:", counts)
 PY
 "${REPOSITORY_ROOT}/scripts/test-all.sh"

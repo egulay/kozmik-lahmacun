@@ -206,6 +206,9 @@ export const api = {
   },
   entities: async () => (await api.entityPage(0, 100)).items,
   entity: (id: string) => request<EntitySummary>(`/api/entities/${id}`),
+  deleteEntity: (id: string) => request<{
+    schemaVersion: string; entityId: string; status: 'COMPLETED' | 'PENDING';
+  }>(`/api/admin/entities/${id}`, { method: 'DELETE' }),
   entitySchema: (id: string) => request<EntitySchema>(`/api/entities/${id}/schema`),
   entityColumns: async (id: string, page = 0, size = 20) => {
     const response = await request<{

@@ -101,6 +101,7 @@ def test_result_summary_sends_original_request_and_complete_small_result() -> No
     assert len(payload["resultRows"]) == 100
     assert payload["resultRows"][0]["month"] == "2026-01-01T00:00:00Z"
     assert payload["resultInformation"]["kpis"][0]["value"] == 157553
+    assert "categories" not in payload["resultInformation"]["charts"][0]
 
 
 def test_result_summary_omits_rows_only_when_complete_result_exceeds_100() -> None:
@@ -112,6 +113,26 @@ def test_result_summary_omits_rows_only_when_complete_result_exceeds_100() -> No
     assert payload["totalRowCount"] == 101
     assert payload["resultRows"] is None
     assert payload["resultInformation"]["kpis"][0]["value"] == 157553
+    assert "categories" not in payload["resultInformation"]["charts"][0]
+
+
+def test_large_result_summary_keeps_comparisons_but_omits_duplicate_breakdown_rows() -> None:
+    provider = TextProvider()
+    analytical_result = result(4_439)
+    analytical_result["summaryFacts"] = {
+        "reportBreakdown": [{"score": index} for index in range(1_000)],
+        "reportComparisons": [{"measure": "employee_count", "maximum": 10}],
+    }
+
+    asyncio.run(ResultExplainer(Registry(provider)).explain(
+        command(), analytical_result,
+    ))
+
+    payload = json.loads(provider.requests[0][1])
+    assert "reportBreakdown" not in payload["resultInformation"]["summaryFacts"]
+    assert payload["resultInformation"]["summaryFacts"]["reportComparisons"] == [
+        {"measure": "employee_count", "maximum": 10},
+    ]
 
 
 def test_result_summary_uses_requested_language_and_plain_text() -> None:

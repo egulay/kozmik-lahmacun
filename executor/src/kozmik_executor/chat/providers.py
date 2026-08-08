@@ -141,6 +141,10 @@ class OpenAiCompatibleProvider:
                 await asyncio.sleep(0.05 * (2**attempt))
             except httpx.HTTPStatusError as exception:
                 status = exception.response.status_code
+                logger.warning(
+                    "llm_provider_request_rejected status=%s retryable=%s",
+                    status, status == 429 or status >= 500,
+                )
                 raise ProviderError(
                     "LLM_PROVIDER_REQUEST_REJECTED",
                     retryable=status == 429 or status >= 500,

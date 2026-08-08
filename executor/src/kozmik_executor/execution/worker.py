@@ -200,17 +200,24 @@ class TrustedReportWorker:
         selected = self.ml_executor if command.execution_type == "ML" else self.executor
         if selected is None:
             raise ValueError("ALGORITHM_NOT_ALLOWED")
-        if self.dataset_resolver is None:
-            result = await selected.execute(
-                command.execution_id, command.order, command.configuration, cancelled)
-        else:
-            async with self.dataset_resolver.resolve(command) as dataset:
-                configuration = dict(command.configuration)
-                execution = dict(configuration.get("execution", {}))
-                execution.update(dataset)
-                configuration["execution"] = execution
+        monitor_stop = asyncio.Event()
+        monitor = asyncio.create_task(
+            self._monitor_spark(command, selected, monitor_stop))
+        try:
+            if self.dataset_resolver is None:
                 result = await selected.execute(
-                    command.execution_id, command.order, configuration, cancelled)
+                    command.execution_id, command.order, command.configuration, cancelled)
+            else:
+                async with self.dataset_resolver.resolve(command) as dataset:
+                    configuration = dict(command.configuration)
+                    execution = dict(configuration.get("execution", {}))
+                    execution.update(dataset)
+                    configuration["execution"] = execution
+                    result = await selected.execute(
+                        command.execution_id, command.order, configuration, cancelled)
+        finally:
+            monitor_stop.set()
+            await monitor
         if cancelled.is_set():
             raise asyncio.CancelledError
         await self._status(
@@ -253,6 +260,79 @@ class TrustedReportWorker:
             occurred_at=datetime.now(timezone.utc), stage=stage, status=status,
             progress_percent=progress, message_code=code, details={"engine": "spark"},
         ))
+
+    async def _monitor_spark(
+        self, command: ExecutionCommand, selected: object, stop: asyncio.Event,
+    ) -> None:
+        spark = getattr(selected, "spark", None)
+        if spark is None:
+            return
+        previous: tuple[int, ...] | None = None
+        sequence = 0
+        while not stop.is_set():
+            try:
+                snapshot = await asyncio.to_thread(
+                    self._spark_snapshot, spark, command.execution_id)
+                signature = tuple(snapshot.values())
+                if snapshot["jobCount"] and signature != previous:
+                    sequence += 1
+                    previous = signature
+                    total = snapshot["totalTasks"]
+                    completed = snapshot["completedTasks"]
+                    task_progress = completed / total if total else 0
+                    progress = min(79, 40 + round(task_progress * 35))
+                    stage = "TRAINING" if command.execution_type == "ML" else "RUNNING"
+                    await self.publish_status(ExecutionStatusEvent(
+                        schema_version="1.0",
+                        event_id=uuid5(
+                            EVENT_NAMESPACE,
+                            f"{command.event_id}:spark-progress:{sequence}:{signature}"),
+                        correlation_id=command.correlation_id,
+                        execution_id=command.execution_id,
+                        entity_id=command.entity_id,
+                        actor_user_id=command.actor_user_id,
+                        occurred_at=datetime.now(timezone.utc),
+                        stage=stage, status="RUNNING", progress_percent=progress,
+                        message_code="EXECUTION_SPARK_PROGRESS",
+                        details={"engine": "spark", "consoleEvent": True, **snapshot},
+                    ))
+            except Exception:
+                logger.warning(
+                    "spark_progress_snapshot_unavailable executionId=%s",
+                    command.execution_id, exc_info=True)
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=1.0)
+            except TimeoutError:
+                pass
+
+    @staticmethod
+    def _spark_snapshot(spark: object, execution_id: UUID) -> dict[str, int]:
+        tracker = spark.sparkContext.statusTracker()
+        job_ids = tracker.getJobIdsForGroup(str(execution_id))
+        stage_ids: set[int] = set()
+        active_jobs = 0
+        for job_id in job_ids:
+            info = tracker.getJobInfo(job_id)
+            if info is None:
+                continue
+            stage_ids.update(int(value) for value in info.stageIds)
+            if str(info.status).upper() == "RUNNING":
+                active_jobs += 1
+        total_tasks = completed_tasks = active_tasks = failed_tasks = 0
+        for stage_id in stage_ids:
+            info = tracker.getStageInfo(stage_id)
+            if info is None:
+                continue
+            total_tasks += int(info.numTasks)
+            completed_tasks += int(info.numCompletedTasks)
+            active_tasks += int(info.numActiveTasks)
+            failed_tasks += int(info.numFailedTasks)
+        return {
+            "jobCount": len(job_ids), "activeJobs": active_jobs,
+            "stageCount": len(stage_ids), "totalTasks": total_tasks,
+            "completedTasks": completed_tasks, "activeTasks": active_tasks,
+            "failedTasks": failed_tasks,
+        }
 
 
 class KafkaExecutionWorker:

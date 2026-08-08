@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import csv
+import json
 import random
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -12,6 +14,7 @@ from pathlib import Path
 
 SALES_ENTITY_ID = "11111111-1111-4111-8111-111111111111"
 PAYMENT_ENTITY_ID = "33333333-3333-4333-8333-333333333333"
+EMPLOYEE_ENTITY_ID = "44444444-4444-4444-8444-444444444444"
 CDR_COLUMNS = (
     "cdr_id", "event_time", "origin_region", "destination_region",
     "duration_seconds", "call_type", "roaming", "charge_amount", "currency_code",
@@ -24,6 +27,13 @@ PAYMENT_COLUMNS = (
     "transaction_id", "account_id", "amount", "currency", "merchant_id",
     "merchant_category", "channel", "country", "device_id", "created_at",
     "is_fraud",
+)
+EMPLOYEE_COLUMNS = (
+    "employee_id", "national_id_number", "badge_number", "department_code",
+    "full_name", "middle_name", "country_code_char", "email", "is_active",
+    "profile_photo", "hourly_rate", "performance_score", "annual_salary",
+    "hire_date", "last_login_ts", "shift_start_local", "employment_tenure",
+    "avg_daily_commute", "skills", "metadata", "address",
 )
 
 
@@ -210,6 +220,120 @@ def write_payments(path: Path, rows: int = 100_000, seed: int = 126) -> None:
             ))
 
 
+def write_employees(path: Path, rows: int = 50_000, seed: int = 168) -> None:
+    """Write deterministic synthetic HR/payroll records.
+
+    CSV has no native representation for Spark binary, interval, array, map,
+    struct, CHAR/VARCHAR, or timestamp-without-time-zone types. Those fields
+    therefore use lossless transport representations: base64, ISO-8601
+    durations, JSON, or plain bounded strings. The governed CSV discovery path
+    can ingest them without entity-specific code and preserve their values in
+    the resulting Parquet dataset.
+    """
+    randomizer = random.Random(seed)
+    reference_date = datetime(2026, 8, 7, tzinfo=timezone.utc)
+    departments = {
+        1: ("Sales", ("negotiation", "crm", "forecasting")),
+        2: ("Finance", ("accounting", "budgeting", "risk")),
+        3: ("Engineering", ("python", "spark", "sql")),
+        4: ("Operations", ("planning", "logistics", "quality")),
+        5: ("Human Resources", ("recruiting", "payroll", "development")),
+        6: ("Marketing", ("campaigns", "analytics", "content")),
+    }
+    locations = (
+        ("TR", "Türkiye", "İstanbul", "34394", "Büyükdere Cd. 42"),
+        ("DE", "Germany", "Frankfurt", "60329", "Bahnhofstrasse 1"),
+        ("GB", "United Kingdom", "London", "EC2A 4NE", "Finsbury Sq. 12"),
+        ("NL", "Netherlands", "Amsterdam", "1012 JS", "Damrak 70"),
+        ("US", "United States", "New York", "10001", "West 31st St. 18"),
+    )
+    first_names = (
+        "Ada", "Ahmet", "Anna", "Can", "Deniz", "Elif", "Emil", "Leyla",
+        "Maya", "Mehmet", "Mina", "Noah", "Selin", "Sofia", "Yusuf",
+    )
+    last_names = (
+        "Acar", "Arslan", "Bauer", "Demir", "Ersoy", "Jansen", "Kaya",
+        "Keller", "Morgan", "Öztürk", "Schmidt", "Şahin", "Taylor", "Yılmaz",
+    )
+    salary_bases = {1: 720_000, 2: 780_000, 3: 960_000,
+                    4: 690_000, 5: 650_000, 6: 740_000}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(EMPLOYEE_COLUMNS)
+        for index in range(rows):
+            employee_id = 1001 + index
+            department_code = 1 + index % len(departments)
+            department, department_skills = departments[department_code]
+            country_code, country, city, postal_code, street = locations[
+                (index * 3 + department_code) % len(locations)
+            ]
+            first_name = first_names[index % len(first_names)]
+            last_name = last_names[(index * 7 + department_code) % len(last_names)]
+            full_name = f"{first_name} {last_name}"
+            hire_days_ago = 90 + randomizer.randrange(16 * 365)
+            hire_date = (reference_date - timedelta(days=hire_days_ago)).date()
+            tenure_months = max(1, (reference_date.date().year - hire_date.year) * 12
+                                + reference_date.date().month - hire_date.month)
+            is_active = index % 23 != 0
+            performance = "" if index % 17 == 0 else f"{min(100, max(35, randomizer.normalvariate(79, 9))):.2f}"
+            annual_salary = salary_bases[department_code]
+            annual_salary *= 1 + min(0.65, tenure_months / 240)
+            annual_salary *= randomizer.uniform(0.88, 1.14)
+            hourly_rate = annual_salary / 2080
+            last_login = ""
+            if is_active and index % 13 != 0:
+                last_login = (reference_date - timedelta(
+                    hours=randomizer.randrange(1, 24 * 45),
+                    minutes=randomizer.randrange(60),
+                )).isoformat().replace("+00:00", "Z")
+            shift_hour = (7 + department_code + index % 3) % 24
+            shift_start = datetime(2026, 8, 7, shift_hour, index % 4 * 15)
+            commute_minutes = 15 + randomizer.randrange(106)
+            skills = list(department_skills)
+            if index % 4 == 0:
+                skills.append("leadership")
+            metadata = {
+                "team": f"{department.lower().replace(' ', '-')}-{1 + index % 8}",
+                "level": ("junior", "mid", "senior", "lead")[index % 4],
+                "cost_center": f"CC-{department_code:02d}-{1 + index % 5:02d}",
+            }
+            address = {
+                "street": street,
+                "city": city,
+                "postal_code": postal_code,
+                "country": country,
+            }
+            photo = ""
+            if index % 5 != 0:
+                thumbnail = b"\x89PNG\r\n\x1a\n" + employee_id.to_bytes(4, "big")
+                photo = base64.b64encode(thumbnail).decode("ascii")
+            writer.writerow((
+                employee_id,
+                900_123_456_789 + index,
+                1 + index % 32_767,
+                department_code,
+                full_name,
+                "",
+                country_code,
+                f"{first_name}.{last_name}.{employee_id}@example.test".lower()
+                .replace("ı", "i").replace("ş", "s").replace("ö", "o"),
+                str(is_active).lower(),
+                photo,
+                f"{hourly_rate:.2f}",
+                performance,
+                f"{annual_salary:.2f}",
+                hire_date.isoformat(),
+                last_login,
+                shift_start.isoformat(sep=" ", timespec="seconds"),
+                f"P{tenure_months // 12}Y{tenure_months % 12}M",
+                f"PT{commute_minutes // 60}H{commute_minutes % 60}M",
+                json.dumps(skills, ensure_ascii=False, separators=(",", ":")),
+                json.dumps(metadata, ensure_ascii=False, separators=(",", ":")),
+                json.dumps(address, ensure_ascii=False, separators=(",", ":")),
+            ))
+
+
 def count_data_rows(path: Path) -> int:
     with path.open(encoding="utf-8") as stream:
         return sum(1 for _ in stream) - 1
@@ -221,15 +345,17 @@ def main() -> None:
     parser.add_argument("--cdr-rows", type=int, default=1_000_000)
     parser.add_argument("--sales-rows", type=int, default=50_000)
     parser.add_argument("--payment-rows", type=int, default=100_000)
+    parser.add_argument("--employee-rows", type=int, default=50_000)
     parser.add_argument(
-        "--workers", type=int, default=3,
-        help="parallel dataset writers (default: 3)",
+        "--workers", type=int, default=4,
+        help="parallel dataset writers (default: 4)",
     )
     arguments = parser.parse_args()
-    if arguments.cdr_rows < 1 or arguments.sales_rows < 1 or arguments.payment_rows < 1:
+    if (arguments.cdr_rows < 1 or arguments.sales_rows < 1
+            or arguments.payment_rows < 1 or arguments.employee_rows < 1):
         parser.error("row counts must be positive")
-    if arguments.workers < 1 or arguments.workers > 3:
-        parser.error("workers must be between 1 and 3")
+    if arguments.workers < 1 or arguments.workers > 4:
+        parser.error("workers must be between 1 and 4")
     cdr = arguments.output / "cdr.csv"
     sales = arguments.output / (
         f"sales_{SALES_ENTITY_ID}_20260728.csv"
@@ -237,10 +363,14 @@ def main() -> None:
     payments = arguments.output / (
         f"payment_transactions_{PAYMENT_ENTITY_ID}_20260728.csv"
     )
+    employees = arguments.output / (
+        f"employee_records_{EMPLOYEE_ENTITY_ID}_20260728.csv"
+    )
     jobs = (
         (write_cdr, cdr, arguments.cdr_rows),
         (write_sales, sales, arguments.sales_rows),
         (write_payments, payments, arguments.payment_rows),
+        (write_employees, employees, arguments.employee_rows),
     )
     if arguments.workers == 1:
         for writer, path, rows in jobs:

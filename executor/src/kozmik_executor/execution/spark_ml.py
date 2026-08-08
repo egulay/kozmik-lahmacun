@@ -30,6 +30,7 @@ from pyspark.ml.regression import (
     RandomForestRegressor,
 )
 from pyspark.sql import functions as spark_fn
+from pyspark.sql.types import BooleanType, DateType, TimestampType
 
 from kozmik_executor.planning.models import MlOrder
 from kozmik_executor.execution.spark_report import FILTER_REGISTRY
@@ -99,6 +100,20 @@ class SparkMlExecutor:
                 .when(comparisons[derivation.operator], spark_fn.lit(1.0))
                 .otherwise(spark_fn.lit(0.0)),
             )
+        # VectorAssembler accepts numeric inputs only. Keep type conversion in
+        # this trusted mapper so plans can use every authorized source field
+        # without containing generated Spark expressions.
+        schema_by_name = {field.name: field.dataType for field in data.schema.fields}
+        for name in order.payload.feature_columns:
+            spark_type = schema_by_name.get(name)
+            if isinstance(spark_type, BooleanType):
+                data = data.withColumn(name, spark_fn.col(name).cast("double"))
+            elif isinstance(spark_type, DateType):
+                data = data.withColumn(
+                    name, spark_fn.col(name).cast("timestamp").cast("long").cast("double"),
+                )
+            elif isinstance(spark_type, TimestampType):
+                data = data.withColumn(name, spark_fn.col(name).cast("long").cast("double"))
         data = data.select(
             *order.payload.feature_columns, order.payload.target_column).dropna()
         if order.payload.problem_type == "BINARY_CLASSIFICATION":

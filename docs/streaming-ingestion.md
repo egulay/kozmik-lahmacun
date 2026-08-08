@@ -27,7 +27,11 @@ Python then enforces exact column
 order and registered Spark types,
 and writes each chunk as an immutable Parquet part under:
 
-`refined/entities/{entityId}/streams/{streamId}/dataset/part-{sequence}-{chunkId}.parquet`
+`refined/entities/{entityId}/dataset/part-stream-{streamId}-{sequence}-{chunkId}.parquet`
+
+Direct file batches and Kafka chunks share this entity-level Parquet dataset.
+Each arrival uses an immutable unique part name, so different ingestion methods
+append safely without rewriting previously governed parts.
 
 Java persists the long-lived source in `ingestion_stream`. Its status is
 `INGESTING` while a chunk is in flight and `COMPLETED` after the latest chunk

@@ -23,6 +23,7 @@ import io.gulay.execution.data.repository.ExecutionStatusHistoryRepository;
 import io.gulay.execution.dto.ExecutionDtos;
 import io.gulay.execution.messaging.ExecutionMessagingContracts;
 import io.gulay.security.PlatformRole;
+import io.gulay.streaming.WorkspaceEventHub;
 import io.gulay.user.data.repository.AppUserReferenceRepository;
 
 import java.nio.charset.StandardCharsets;
@@ -37,6 +38,8 @@ import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 @RequiredArgsConstructor
@@ -51,6 +54,7 @@ public class ReportPlanningService {
     private final EffectiveConfigurationService configurationService;
     private final ObjectMapper objectMapper;
     private final Clock clock;
+    private final WorkspaceEventHub workspaceEvents;
 
     @Transactional
     public ExecutionDtos.ReportPlanResponse createPending(
@@ -100,7 +104,9 @@ public class ReportPlanningService {
                 .stage("PLANNING").status(ExecutionStatus.PLANNING).progress(0)
                 .messageCode(type + "_PLANNING_STARTED").messageParameters("{}")
                 .occurredAt(now).build());
-        return response(execution);
+        val response = response(execution);
+        afterCommit(keycloakUserId, "execution-created", response);
+        return response;
     }
 
     @Transactional
@@ -146,7 +152,9 @@ public class ReportPlanningService {
         outboxRepository.save(ExecutionCommandOutboxModel.builder()
                 .id(UUID.randomUUID()).eventId(command.eventId()).execution(execution)
                 .payloadJson(json(command)).createdAt(now).attemptCount(0).build());
-        return response(execution);
+        val response = response(execution);
+        afterCommit(keycloakUserId, "execution-status-changed", response);
+        return response;
     }
 
     @Transactional
@@ -160,6 +168,8 @@ public class ReportPlanningService {
                     .stage("PLANNING").status(ExecutionStatus.FAILED).progress(0)
                     .messageCode(messageCode).messageParameters("{}")
                     .occurredAt(now).build());
+            afterCommit(execution.getOwner().getKeycloakUserId(),
+                    "execution-failed", response(execution));
         });
     }
 
@@ -287,7 +297,9 @@ public class ReportPlanningService {
         outboxRepository.save(ExecutionCommandOutboxModel.builder()
                 .id(UUID.randomUUID()).eventId(command.eventId()).execution(execution)
                 .payloadJson(json(command)).createdAt(now).attemptCount(0).build());
-        return response(execution);
+        val response = response(execution);
+        afterCommit(execution.getOwner().getKeycloakUserId(), "execution-created", response);
+        return response;
     }
 
     private ExecutionDtos.ReportPlanResponse response(ExecutionRequestModel execution) {
@@ -299,6 +311,16 @@ public class ReportPlanningService {
         } catch (Exception exception) {
             throw new IllegalStateException("Stored execution order is invalid", exception);
         }
+    }
+
+    private void afterCommit(String userSubject, String eventName, Object data) {
+        val eventId = UUID.randomUUID();
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                workspaceEvents.publishExecution(userSubject, eventId, eventName, data);
+            }
+        });
     }
 
     private String json(Object value) {

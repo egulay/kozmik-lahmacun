@@ -93,15 +93,22 @@
     })();
     healthTimer = setInterval(refreshServiceStatuses, 10_000);
     unsubscribeExecutionEvents = subscribeExecutionEvents((_event, name) => {
-      if (name !== 'heartbeat') {
-        void loadExecutionTree(true);
-        void loadResultTree(true);
+      if (name.startsWith('chat-thread-')) void refreshChatTreeHead();
+      if (name.startsWith('execution-')) void refreshExecutionTreeHead();
+      if (name.startsWith('entity-')) {
+        window.dispatchEvent(new CustomEvent('kozmik:entity-changed', {
+          detail: { entityId: _event.data, eventName: name }
+        }));
+      }
+      if (['execution-result-ready', 'execution-failed'].includes(name)) {
+        void refreshResultTreeHead();
       }
     });
     window.addEventListener('focus', refreshTrees);
     window.addEventListener('kozmik:execution-deleted', onExecutionDeleted);
     window.addEventListener('kozmik:chat-thread-deleted', onChatThreadDeleted);
     window.addEventListener('kozmik:chat-thread-renamed', onChatThreadRenamed);
+    window.addEventListener('kozmik:chat-thread-created', onChatThreadCreated);
     return () => {
       if (healthTimer) clearInterval(healthTimer);
       unsubscribeExecutionEvents?.();
@@ -109,6 +116,7 @@
       window.removeEventListener('kozmik:execution-deleted', onExecutionDeleted);
       window.removeEventListener('kozmik:chat-thread-deleted', onChatThreadDeleted);
       window.removeEventListener('kozmik:chat-thread-renamed', onChatThreadRenamed);
+      window.removeEventListener('kozmik:chat-thread-created', onChatThreadCreated);
       systemTheme?.removeEventListener('change', applySystemTheme);
     };
   });
@@ -171,6 +179,56 @@
     const thread = (event as CustomEvent<{ thread: ChatThread }>).detail?.thread;
     if (!thread) return;
     recentThreads = recentThreads.map((item) => item.id === thread.id ? thread : item);
+  }
+
+  function onChatThreadCreated(event: Event) {
+    const thread = (event as CustomEvent<{ thread: ChatThread }>).detail?.thread;
+    if (!thread) return;
+    recentThreads = [thread, ...recentThreads.filter((item) => item.id !== thread.id)];
+  }
+
+  async function refreshChatTreeHead() {
+    try {
+      const response = await api.threadPage(0, 5);
+      const headIds = new Set(response.items.map((item) => item.id));
+      recentThreads = [
+        ...response.items,
+        ...recentThreads.filter((item) => !headIds.has(item.id))
+      ];
+      if (chatTreePage === 0) chatTreeLast = response.last;
+    } catch {
+      // The health indicator communicates temporary backend unavailability.
+    }
+  }
+
+  async function refreshExecutionTreeHead() {
+    try {
+      const response = await api.executionPage({ page: 0, size: 5 });
+      const headIds = new Set(response.items.map((item) => item.id));
+      executionTree = [
+        ...response.items,
+        ...executionTree.filter((item) => !headIds.has(item.id))
+      ];
+      if (executionTreePage === 0) executionTreeLast = response.last;
+    } catch {
+      // The health indicator communicates temporary backend unavailability.
+    }
+  }
+
+  async function refreshResultTreeHead() {
+    try {
+      const response = await api.executionPage({
+        page: 0, size: 5, statuses: ['SUCCEEDED', 'FAILED']
+      });
+      const headIds = new Set(response.items.map((item) => item.id));
+      resultTree = [
+        ...response.items,
+        ...resultTree.filter((item) => !headIds.has(item.id))
+      ];
+      if (resultTreePage === 0) resultTreeLast = response.last;
+    } catch {
+      // The health indicator communicates temporary backend unavailability.
+    }
   }
 
   async function loadExecutionTree(reset = false) {

@@ -278,6 +278,9 @@
     try {
       const created = await api.createThread(title, $locale);
       threads = [created, ...threads];
+      window.dispatchEvent(new CustomEvent('kozmik:chat-thread-created', {
+        detail: { thread: created }
+      }));
       threadTitle = '';
       createDialogOpen = false;
       await selectThread(created.id);

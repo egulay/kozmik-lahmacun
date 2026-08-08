@@ -1,9 +1,9 @@
-# Entity structure API
+# Data Entity Structure API
 
 All responses use message-contract `schemaVersion` `1.0`. This field versions
 the HTTP document shape; it is not a data-entity schema version.
 
-- `GET /api/entities` lists active entities to every authenticated user.
+- `GET /api/entities` lists active Data Entities to every authenticated user.
 - `GET /api/entities/{entityId}/schema` returns the entity's registered structure.
 - `GET /api/entities/{entityId}/schema/columns` returns its paged columns.
 - `/api/admin/entities/**` provides Admin-only entity create/update operations.

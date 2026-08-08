@@ -25,21 +25,52 @@ def test_demo_generators_are_deterministic_and_contract_shaped(tmp_path):
     generator.write_cdr(first / "cdr.csv", rows=25)
     generator.write_sales(first / "sales.csv", rows=25)
     generator.write_payments(first / "payments.csv", rows=250)
+    generator.write_employees(first / "employees.csv", rows=250)
     generator.write_cdr(second / "cdr.csv", rows=25)
     generator.write_sales(second / "sales.csv", rows=25)
     generator.write_payments(second / "payments.csv", rows=250)
+    generator.write_employees(second / "employees.csv", rows=250)
     assert (first / "cdr.csv").read_bytes() == (second / "cdr.csv").read_bytes()
     assert (first / "sales.csv").read_bytes() == (second / "sales.csv").read_bytes()
     assert (first / "payments.csv").read_bytes() == (second / "payments.csv").read_bytes()
+    assert (first / "employees.csv").read_bytes() == (second / "employees.csv").read_bytes()
     assert generator.count_data_rows(first / "cdr.csv") == 25
     assert generator.count_data_rows(first / "sales.csv") == 25
     assert generator.count_data_rows(first / "payments.csv") == 250
+    assert generator.count_data_rows(first / "employees.csv") == 250
     assert tuple((first / "cdr.csv").read_text().splitlines()[0].split(",")) == (
         generator.CDR_COLUMNS
     )
     assert tuple((first / "payments.csv").read_text().splitlines()[0].split(",")) == (
         generator.PAYMENT_COLUMNS
     )
+    with (first / "employees.csv").open(encoding="utf-8") as stream:
+        assert tuple(next(csv.reader(stream))) == generator.EMPLOYEE_COLUMNS
+
+
+def test_employee_demo_preserves_csv_safe_complex_values(tmp_path):
+    generator = load_generator()
+    target = tmp_path / "employees.csv"
+    generator.write_employees(target, rows=500)
+
+    with target.open(encoding="utf-8") as stream:
+        records = list(csv.DictReader(stream))
+
+    assert len(records) == 500
+    assert {record["department_code"] for record in records} == {
+        "1", "2", "3", "4", "5", "6"
+    }
+    assert {record["country_code_char"] for record in records} == {
+        "TR", "DE", "GB", "NL", "US"
+    }
+    assert "" in {record["middle_name"] for record in records}
+    assert "" in {record["profile_photo"] for record in records}
+    assert all(len(record["country_code_char"]) == 2 for record in records)
+    assert all(json.loads(record["skills"]) for record in records)
+    assert all("cost_center" in json.loads(record["metadata"]) for record in records)
+    assert all("postal_code" in json.loads(record["address"]) for record in records)
+    assert all(record["employment_tenure"].startswith("P") for record in records)
+    assert all(record["avg_daily_commute"].startswith("PT") for record in records)
 
 
 def test_payment_demo_contains_meaningful_supervised_fraud_signals(tmp_path):
@@ -71,7 +102,8 @@ def test_parallel_cli_generation_matches_sequential_output(tmp_path):
     script = ROOT / "demo" / "generate_data.py"
     sequential = tmp_path / "sequential"
     parallel = tmp_path / "parallel"
-    common = ["--cdr-rows", "250", "--sales-rows", "250", "--payment-rows", "250"]
+    common = ["--cdr-rows", "250", "--sales-rows", "250", "--payment-rows", "250",
+              "--employee-rows", "250"]
 
     subprocess.run(
         [sys.executable, str(script), "--output", str(sequential), *common,
@@ -80,7 +112,7 @@ def test_parallel_cli_generation_matches_sequential_output(tmp_path):
     )
     subprocess.run(
         [sys.executable, str(script), "--output", str(parallel), *common,
-         "--workers", "3"],
+         "--workers", "4"],
         check=True,
     )
 

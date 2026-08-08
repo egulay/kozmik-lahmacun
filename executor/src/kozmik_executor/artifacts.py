@@ -32,6 +32,13 @@ class ExecutionArtifactDeleteRequest(BaseModel):
     artifacts: list[ArtifactLocation] = Field(max_length=20)
 
 
+class EntityArtifactDeleteRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    schema_version: str = Field(alias="schemaVersion", pattern=r"^1\.0$")
+    entity_id: UUID = Field(alias="entityId")
+
+
 def artifact_store() -> Minio:
     return Minio(
         os.getenv("MINIO_ENDPOINT", "localhost:9000"),
@@ -84,3 +91,36 @@ async def delete_execution_artifacts(
         "executionId": str(request.execution_id),
         "deletedArtifactIds": [str(item) for item in deleted],
     }
+
+
+@router.post("/entities/delete")
+async def delete_entity_artifacts(
+    request: EntityArtifactDeleteRequest,
+    store: Annotated[Minio, Depends(artifact_store)],
+    x_internal_api_key: str | None = Header(default=None),
+) -> dict[str, object]:
+    _authenticate(x_internal_api_key)
+    entity_text = str(request.entity_id)
+    targets: list[tuple[str, str]] = []
+    try:
+        for item in await asyncio.to_thread(
+            lambda: list(store.list_objects(
+                "refined", prefix=f"entities/{entity_text}/", recursive=True))
+        ):
+            targets.append(("refined", item.object_name))
+        for item in await asyncio.to_thread(
+            lambda: list(store.list_objects("raw", recursive=True))
+        ):
+            if entity_text in item.object_name:
+                targets.append(("raw", item.object_name))
+        for bucket, object_key in targets:
+            await asyncio.to_thread(store.remove_object, bucket, object_key)
+    except Exception as exception:
+        logger.exception("entity_artifact_delete_failed entityId=%s", request.entity_id)
+        raise HTTPException(status_code=502, detail="entity artifact deletion failed") from exception
+    logger.info(
+        "entity_artifacts_deleted entityId=%s objectCount=%s",
+        request.entity_id, len(targets),
+    )
+    return {"schemaVersion": "1.0", "entityId": entity_text,
+            "deletedObjectCount": len(targets)}

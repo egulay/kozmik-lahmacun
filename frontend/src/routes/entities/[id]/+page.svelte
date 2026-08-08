@@ -1,19 +1,23 @@
 <script lang="ts">
   import { page } from '$app/stores';
-  import { ArrowLeft, Database, LoaderCircle } from '@lucide/svelte';
+  import { onMount } from 'svelte';
+  import { ArrowLeft, Database, LoaderCircle, Trash2 } from '@lucide/svelte';
+  import { goto } from '$app/navigation';
   import { api } from '$lib/api';
   import { locale, statusLabel, t } from '$lib/i18n';
   import type { ColumnDefinition, EntitySummary } from '$lib/types';
   import * as Card from '$lib/components/ui/card/index.js';
   import { Badge } from '$lib/components/ui/badge/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
+  import * as Dialog from '$lib/components/ui/dialog/index.js';
+  import { currentUser, hasRole } from '$lib/session';
   import * as Table from '$lib/components/ui/table/index.js';
   import PageHeader from '$lib/components/PageHeader.svelte';
   import StateView from '$lib/components/StateView.svelte';
   import StatusBadge from '$lib/components/StatusBadge.svelte';
   import { DurableEventStream } from '$lib/sse';
   import ServerPagination from '$lib/components/ServerPagination.svelte';
-  import { getWorkspaceView, openWorkspaceTab, setWorkspaceView } from '$lib/workspace-tabs';
+  import { closeWorkspaceTab, deleteWorkspaceView, getWorkspaceView, openWorkspaceTab, setWorkspaceView } from '$lib/workspace-tabs';
 
   let entity = $state<EntitySummary | null>(null);
   let columns = $state<ColumnDefinition[]>([]);
@@ -33,7 +37,23 @@
   let lastCheckpoint = $state<string | null>(null);
   let activeEntityId = '';
   let loadSequence = 0;
+  let deleteDialogOpen = $state(false);
+  let deleting = $state(false);
+  let deleteError = $state('');
   const STREAM_IDLE_COMPLETION_MS = 10_000;
+
+  onMount(() => {
+    const entityChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        entityId?: string; eventName?: string;
+      }>).detail;
+      if (detail?.entityId !== activeEntityId) return;
+      if (detail.eventName === 'entity-deleted') void goto('/entities');
+      else void load(false);
+    };
+    window.addEventListener('kozmik:entity-changed', entityChanged);
+    return () => window.removeEventListener('kozmik:entity-changed', entityChanged);
+  });
   type EntityView = {
     entity: EntitySummary;
     columns: ColumnDefinition[];
@@ -209,10 +229,35 @@
       if (activeEntityId === id) void load(false, columnPage, id);
     }, 1_000);
   }
+
+  async function deleteEntity() {
+    if (!entity || deleting) return;
+    deleting = true;
+    deleteError = '';
+    try {
+      const deletedId = entity.id;
+      await api.deleteEntity(deletedId);
+      closeEntityResources();
+      closeWorkspaceTab('entity', deletedId);
+      deleteWorkspaceView(`entity:${deletedId}:en`);
+      deleteWorkspaceView(`entity:${deletedId}:tr`);
+      deleteDialogOpen = false;
+      await goto('/entities');
+    } catch {
+      deleteError = $t('deleteEntityFailed');
+    } finally {
+      deleting = false;
+    }
+  }
 </script>
 
 <PageHeader title={entity?.name ?? $t('entity')} description={entity?.description}>
-  {#snippet actions()}<Button href="/entities" variant="outline" size="sm"><ArrowLeft size={16} />{$t('back')}</Button>{/snippet}
+  {#snippet actions()}
+    {#if entity && hasRole($currentUser, 'ADMIN')}
+      <Button variant="destructive" size="sm" onclick={() => deleteDialogOpen = true}><Trash2 size={16} />{$t('delete')}</Button>
+    {/if}
+    <Button href="/entities" variant="outline" size="sm"><ArrowLeft size={16} />{$t('back')}</Button>
+  {/snippet}
 </PageHeader>
 <StateView loading={loading && !entity} {error} onretry={load} />
 {#if entity}
@@ -296,3 +341,20 @@
     </Card.Footer>
   </Card.Root>
 {/if}
+
+<Dialog.Root bind:open={deleteDialogOpen}>
+  <Dialog.Content>
+    <Dialog.Header>
+      <Dialog.Title>{$t('deleteEntityTitle')}</Dialog.Title>
+      <Dialog.Description>{$t('deleteEntityBody')}</Dialog.Description>
+    </Dialog.Header>
+    {#if deleteError}<p class="text-sm text-destructive">{deleteError}</p>{/if}
+    <Dialog.Footer>
+      <Button variant="outline" disabled={deleting} onclick={() => deleteDialogOpen = false}>{$t('keepExecution')}</Button>
+      <Button variant="destructive" disabled={deleting} onclick={deleteEntity}>
+        {#if deleting}<LoaderCircle class="animate-spin" size={16} />{/if}
+        {deleting ? $t('deleting') : $t('deleteEntity')}
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>

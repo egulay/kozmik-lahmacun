@@ -49,8 +49,8 @@ case "${1:-}" in
     fi
     ;;
   --require-demo-data)
-    if (( entity_count < 3 )); then
-      echo "Expected at least the Sales, Telecom CDR, and Payment Transactions demo entities." >&2
+    if (( entity_count < 4 )); then
+      echo "Expected at least the Sales, Telecom CDR, Payment Transactions, and Employee Records demo entities." >&2
       exit 1
     fi
     ;;

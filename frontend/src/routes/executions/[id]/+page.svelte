@@ -2,7 +2,8 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
-  import { ArrowLeft, Ban, ChartNoAxesCombined, LoaderCircle, TriangleAlert } from '@lucide/svelte';
+  import { tick } from 'svelte';
+  import { ArrowLeft, Ban, ChartNoAxesCombined, LoaderCircle, SquareTerminal, TriangleAlert, X } from '@lucide/svelte';
   import { api } from '$lib/api';
   import { locale, t } from '$lib/i18n';
   import type { EntitySummary, Execution } from '$lib/types';
@@ -12,6 +13,7 @@
   import * as Card from '$lib/components/ui/card/index.js';
   import * as Alert from '$lib/components/ui/alert/index.js';
   import * as Dialog from '$lib/components/ui/dialog/index.js';
+  import * as Sheet from '$lib/components/ui/sheet/index.js';
   import { Badge } from '$lib/components/ui/badge/index.js';
   import { Separator } from '$lib/components/ui/separator/index.js';
   import { Progress } from '$lib/components/ui/progress/index.js';
@@ -31,6 +33,7 @@
   import ProgressStageIcon from '$lib/components/ProgressStageIcon.svelte';
   import MarkdownMessage from '$lib/components/MarkdownMessage.svelte';
   import ExecutionTypeIcon from '$lib/components/ExecutionTypeIcon.svelte';
+  import { lifecycleTimeline } from '$lib/execution-timeline';
 
   type ExecutionView = { execution: Execution; localizedEntity: EntitySummary | null };
   const initialView = getWorkspaceView<ExecutionView>(`execution:${$page.params.id}:${$locale}`);
@@ -43,6 +46,9 @@
   let durationTimer: ReturnType<typeof setInterval> | undefined;
   let durationNow = $state(Date.now());
   let cancelDialogOpen = $state(false);
+  let sparkConsoleElement = $state<HTMLDivElement>();
+  let sparkConsoleFollowLatest = $state(true);
+  let sparkConsoleOpen = $state(false);
   const terminalStatuses = new Set(['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT']);
 
   function isTerminal(status: string): boolean {
@@ -94,7 +100,10 @@
 
   async function load(executionId = $page.params.id!, selectedLocale = $locale) {
     const initialLoad = execution?.id !== executionId;
-    if (initialLoad) loading = true;
+    if (initialLoad) {
+      loading = true;
+      sparkConsoleFollowLatest = true;
+    }
     try {
       const loadedExecution = await api.execution(executionId);
       const loadedEntity = await api.entity(loadedExecution.entityId).catch(() => null);
@@ -222,13 +231,71 @@
     );
   });
 
-  const timelineHistory = $derived.by(() =>
+  const timelineHistory = $derived.by(() => {
+    if (!execution) return [];
+    return lifecycleTimeline(execution.history, execution.executionType);
+  });
+
+  const sparkConsoleHistory = $derived.by(() =>
     execution
-      ? [...execution.history].sort(
-          (left, right) => Date.parse(right.occurredAt) - Date.parse(left.occurredAt)
-        )
+      ? execution.history.filter((item) => [
+          'EXECUTION_SPARK_RUNNING', 'EXECUTION_ML_TRAINING',
+          'EXECUTION_ML_TUNING', 'EXECUTION_SPARK_PROGRESS',
+          'EXECUTION_WRITING_RESULTS', 'SPARK_JOB_FAILED',
+          'SPARK_RUNTIME_UNAVAILABLE'
+        ].includes(item.messageCode))
       : []
   );
+
+  $effect(() => {
+    const entryCount = sparkConsoleHistory.length;
+    if (!entryCount || !sparkConsoleElement || !sparkConsoleFollowLatest) return;
+    void tick().then(() => {
+      if (sparkConsoleElement) {
+        sparkConsoleElement.scrollTop = sparkConsoleElement.scrollHeight;
+      }
+    });
+  });
+
+  function handleSparkConsoleScroll() {
+    if (!sparkConsoleElement) return;
+    const distanceFromBottom = sparkConsoleElement.scrollHeight
+      - sparkConsoleElement.scrollTop - sparkConsoleElement.clientHeight;
+    sparkConsoleFollowLatest = distanceFromBottom <= 12;
+  }
+
+  function followLatestSparkOutput() {
+    sparkConsoleFollowLatest = true;
+    void tick().then(() => {
+      if (sparkConsoleElement) {
+        sparkConsoleElement.scrollTop = sparkConsoleElement.scrollHeight;
+      }
+    });
+  }
+
+  function numericDetail(item: { details?: unknown }, key: string): number {
+    if (!item.details || typeof item.details !== 'object') return 0;
+    const value = (item.details as Record<string, unknown>)[key];
+    return typeof value === 'number' ? value : 0;
+  }
+
+  function consoleMessage(item: Execution['history'][number]): string {
+    if (item.messageCode === 'EXECUTION_SPARK_PROGRESS') {
+      return $t('sparkProgressMessage')
+        .replace('{jobs}', String(numericDetail(item, 'jobCount')))
+        .replace('{stages}', String(numericDetail(item, 'stageCount')))
+        .replace('{completed}', String(numericDetail(item, 'completedTasks')))
+        .replace('{total}', String(numericDetail(item, 'totalTasks')))
+        .replace('{active}', String(numericDetail(item, 'activeTasks')))
+        .replace('{failed}', String(numericDetail(item, 'failedTasks')));
+    }
+    if (item.messageCode === 'EXECUTION_ML_TUNING') return $t('sparkTuningStarted');
+    if (item.messageCode === 'EXECUTION_ML_TRAINING') return $t('sparkTrainingStarted');
+    if (item.messageCode === 'EXECUTION_WRITING_RESULTS') return $t('sparkResultWriting');
+    if (item.messageCode === 'SPARK_JOB_FAILED') return $t('sparkConsoleFailed');
+    if (item.messageCode === 'SPARK_RUNTIME_UNAVAILABLE') return $t('sparkRuntimeUnavailable');
+    return $t('sparkExecutionStarted');
+  }
 
   async function afterDelete() {
     if (!execution) return;
@@ -239,13 +306,13 @@
   }
 </script>
 
-<div class="pdf-document">
 <div class="pdf-brand"><strong>{$t('brand')}</strong><span>{$t('governedAnalytics')}</span></div>
 <PageHeader
   title={execution
     ? (execution.executionType.toUpperCase().includes('ML') ? $t('ml') : $t('report'))
     : $t('details')}
   description={execution?.id}
+  sticky
 >
   {#snippet icon()}
     {#if execution && !isTerminal(execution.status)}
@@ -274,6 +341,7 @@
     </div>
   {/snippet}
 </PageHeader>
+<div class="pdf-document">
 <StateView loading={loading && !execution} {error} onretry={load} />
 {#if execution}
   {#if failureExplanation}
@@ -343,10 +411,21 @@
   </Card.Root>
   <Card.Root class="pdf-breakable pdf-exclude">
     <Card.Header class="flex flex-row items-start justify-between">
-      <div class="min-w-0 flex-1"><Card.Title>{$t('timeline')}</Card.Title><Card.Description>{execution.history.length} {$t('status')}</Card.Description></div>
-      {#if !['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT'].includes(execution.status)}
-        <Button class="ml-auto shrink-0 self-start" variant="outline" size="sm" disabled={cancelling} onclick={() => (cancelDialogOpen = true)}><Ban size={15} />{$t('cancel')}</Button>
-      {/if}
+      <div class="min-w-0 flex-1"><Card.Title>{$t('timeline')}</Card.Title><Card.Description>{timelineHistory.length} {$t('status')}</Card.Description></div>
+      <div class="ml-auto flex shrink-0 items-center gap-2">
+        <Button variant="outline" size="sm" onclick={() => (sparkConsoleOpen = true)}>
+          <SquareTerminal size={15} />
+          <span class="relative">
+            {$t('liveConsoleButton')}
+            {#if !['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT'].includes(execution.status)}
+              <span class="absolute -right-2 -top-1 size-1.5 animate-pulse rounded-full bg-emerald-500" aria-hidden="true"></span>
+            {/if}
+          </span>
+        </Button>
+        {#if !['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT'].includes(execution.status)}
+          <Button variant="outline" size="sm" disabled={cancelling} onclick={() => (cancelDialogOpen = true)}><Ban size={15} />{$t('cancel')}</Button>
+        {/if}
+      </div>
     </Card.Header>
     <Card.Content>
       <div class="mb-4 space-y-2" aria-live="polite">
@@ -379,4 +458,80 @@
     <Dialog.Footer><Dialog.Close>{#snippet child({ props })}<Button {...props} variant="outline">{$t('back')}</Button>{/snippet}</Dialog.Close><Button variant="destructive" disabled={cancelling} onclick={cancel}><Ban />{$t('cancel')}</Button></Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
+
+<Sheet.Root bind:open={sparkConsoleOpen}>
+  <Sheet.Content
+    side="bottom"
+    showCloseButton={false}
+    class="mx-auto !h-[min(24rem,42dvh)] w-[calc(100%_-_1rem)] max-w-5xl gap-3 rounded-t-xl border-x sm:w-[calc(100%_-_2rem)]"
+  >
+    <Sheet.Header class="border-b px-4 pb-3 sm:px-6">
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div class="min-w-0">
+          <Sheet.Title class="flex items-center gap-2"><SquareTerminal size={18} />{$t('liveExecutionConsole')}</Sheet.Title>
+          <Sheet.Description class="flex flex-wrap items-center gap-x-2">
+            <span>{$t('liveExecutionConsoleBody')}</span>
+            <span class="tabular-nums">· {sparkConsoleHistory.length} {$t('status')}</span>
+          </Sheet.Description>
+        </div>
+        <div class="flex shrink-0 items-center gap-2 self-end sm:self-start">
+          <Button
+            variant={sparkConsoleFollowLatest ? 'secondary' : 'outline'}
+            size="sm"
+            onclick={followLatestSparkOutput}
+          >{$t('followLatest')}</Button>
+          <Sheet.Close>
+            {#snippet child({ props })}
+              <Button {...props} variant="outline" size="sm"><X size={15} />{$t('close')}</Button>
+            {/snippet}
+          </Sheet.Close>
+        </div>
+      </div>
+      {#if execution}
+        <div class="mt-2 flex min-w-0 items-center justify-between gap-4 text-xs">
+          <div class="flex min-w-0 items-center gap-2">
+            <span class="shrink-0 text-muted-foreground">{$t('executionId')}</span>
+            <code class="truncate font-mono text-foreground" title={execution.id}>{execution.id}</code>
+            <span class="shrink-0 text-border" aria-hidden="true">·</span>
+            <span class="shrink-0 text-muted-foreground">{$t('duration')}</span>
+            <span class="shrink-0 tabular-nums text-foreground">{formatDuration(
+              execution.requestedAt,
+              execution.completedAt ?? new Date(durationNow).toISOString(),
+              $locale === 'tr' ? 'tr-TR' : 'en-US'
+            )}</span>
+          </div>
+          <Badge class="shrink-0" variant="secondary">
+            {execution.executionType.toUpperCase().includes('ML') ? $t('ml') : $t('report')}
+          </Badge>
+        </div>
+      {/if}
+    </Sheet.Header>
+    <div class="min-h-0 flex-1 px-4 pb-4 sm:px-6">
+      <div
+        bind:this={sparkConsoleElement}
+        onscroll={handleSparkConsoleScroll}
+        class="h-full overflow-y-auto rounded-md border bg-zinc-950 p-3 font-mono text-xs text-zinc-100"
+        aria-live="polite"
+      >
+        {#if sparkConsoleHistory.length}
+          {#each sparkConsoleHistory as item}
+            <div class="grid grid-cols-[auto_1fr] gap-3 py-1">
+              <time class="whitespace-nowrap text-zinc-500">{new Date(item.occurredAt).toLocaleTimeString(
+                $locale === 'tr' ? 'tr-TR' : 'en-GB',
+                { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }
+              )}</time>
+              <span class:item-console-error={item.status === 'FAILED'}>{consoleMessage(item)}</span>
+            </div>
+          {/each}
+        {:else}
+          <p class="text-zinc-500">{$t('sparkConsoleWaiting')}</p>
+        {/if}
+      </div>
+    </div>
+  </Sheet.Content>
+</Sheet.Root>
 </div>
+
+<style>
+  .item-console-error { color: rgb(248 113 113); }
+</style>

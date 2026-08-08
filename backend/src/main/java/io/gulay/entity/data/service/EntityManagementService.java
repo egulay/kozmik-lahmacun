@@ -52,6 +52,7 @@ public class EntityManagementService {
     private final IngestionStreamRepository ingestionStreamRepository;
     private final IngestionStreamBatchRepository ingestionStreamBatchRepository;
     private final AppUserReferenceRepository userRepository;
+    private final io.gulay.entity.data.repository.EntityDeletionRepository deletionRepository;
     private final Clock clock;
 
     @Value("${kozmik.ingestion.system-keycloak-user-id:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3}")
@@ -82,7 +83,7 @@ public class EntityManagementService {
         user(keycloakUserId);
         val pageable = PageRequest.of(page, size, Sort.by("name").ascending());
         val entities = roles.contains(PlatformRole.ADMIN)
-                ? entityRepository.findAll(pageable)
+                ? entityRepository.findByStatusNot(EntityStatus.DELETION_PENDING, pageable)
                 : entityRepository.findByStatus(EntityStatus.ACTIVE, pageable);
         val summaries = entities.stream().map(entity -> summary(entity, language)).toList();
         return new EntityDtos.EntityListResponse(
@@ -176,6 +177,9 @@ public class EntityManagementService {
     @Transactional
     public EntityDtos.EntitySchemaResponse resolveOrRegisterStreamEntity(
             EntityDtos.StreamEntityDescriptor descriptor) {
+        if (deletionRepository.tombstoned(descriptor.id())) {
+            throw new ConflictException("Entity UUID was retired and cannot be ingested again; use a new UUID");
+        }
         validateColumns(descriptor.columns());
         val existing = entityRepository.findById(descriptor.id());
         if (existing.isPresent()) {
@@ -198,7 +202,7 @@ public class EntityManagementService {
             return schema(entity);
         }
         if (entityRepository.existsByNameIgnoreCase(descriptor.name())) {
-            throw new ConflictException("Entity name is already registered");
+            throw new ConflictException("Data entity name is already registered");
         }
         val now = Instant.now(clock);
         val actor = user(ingestionSystemKeycloakUserId);
@@ -243,7 +247,7 @@ public class EntityManagementService {
     public EntityDtos.EntitySummary create(
             EntityDtos.CreateEntityRequest request, String actorKeycloakId) {
         if (entityRepository.existsByNameIgnoreCase(request.name())) {
-            throw new ConflictException("An entity with this name already exists");
+            throw new ConflictException("A data entity with this name already exists");
         }
         val now = Instant.now(clock);
         return summary(entityRepository.save(BusinessEntityModel.builder()
@@ -279,7 +283,7 @@ public class EntityManagementService {
     private BusinessEntityModel activeEntity(UUID entityId) {
         return entityRepository.findById(entityId)
                 .filter(entity -> entity.getStatus() == EntityStatus.ACTIVE)
-                .orElseThrow(() -> new ResourceNotFoundException("Active entity not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("Active data entity not found"));
     }
 
     private AppUserReferenceModel user(String keycloakId) {
@@ -290,7 +294,7 @@ public class EntityManagementService {
 
     private void requireSchema(BusinessEntityModel entity) {
         if (!columnRepository.existsByEntityId(entity.getId())) {
-            throw new ResourceNotFoundException("No schema is registered for this entity");
+            throw new ResourceNotFoundException("No structure is registered for this data entity");
         }
     }
 

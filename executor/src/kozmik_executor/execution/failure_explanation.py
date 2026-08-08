@@ -62,15 +62,15 @@ class FailureExplainer:
                 False,
             ),
             "SCHEMA_VERSION_MISMATCH": (
-                "The governed dataset schema version did not match the approved execution instruction.",
+                "The execution instruction used an unsupported message-contract version.",
                 False,
             ),
             "GOVERNED_DATASET_NOT_FOUND": (
-                "No completed governed dataset was available for the selected entity and schema version.",
+                "No analysis-ready data was available for the selected data entity.",
                 False,
             ),
             "GOVERNED_DATASET_BINDING_MISMATCH": (
-                "The resolved governed dataset did not belong to the approved entity and schema version.",
+                "The resolved data did not belong to the approved execution and data entity.",
                 False,
             ),
             "SPARK_JOB_FAILED": (

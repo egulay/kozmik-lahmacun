@@ -15,6 +15,8 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.core.oidc.user.OidcUser;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -24,6 +26,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class AdminEntityController {
     private final EntityManagementService service;
+    private final io.gulay.entity.data.service.EntityDeletionService deletionService;
 
     @org.springframework.web.bind.annotation.PostMapping
     ResponseEntity<EntityDtos.EntitySummary> create(
@@ -38,6 +41,17 @@ public class AdminEntityController {
             @PathVariable UUID entityId,
             @Valid @RequestBody EntityDtos.UpdateEntityRequest request) {
         return service.update(entityId, request);
+    }
+
+    @DeleteMapping("/{entityId}")
+    java.util.Map<String, Object> delete(
+            @PathVariable UUID entityId, @AuthenticationPrincipal OidcUser user,
+            @RequestHeader(name = "X-Correlation-ID", required = false) String correlationId) {
+        val id = correlationId == null || correlationId.isBlank()
+                ? UUID.randomUUID().toString() : correlationId;
+        val completed = deletionService.delete(entityId, user.getSubject(), id);
+        return java.util.Map.of("schemaVersion", "1.0", "entityId", entityId,
+                "status", completed ? "COMPLETED" : "PENDING");
     }
 
 }
